@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Outreach — a job-search agent
 
-## Getting Started
+Chat with an AI agent that finds open roles, finds the recruiter or hiring
+manager, gets their work email, and sends a short personal email from your own
+Gmail — only after you click **Send**. It's keyboard-first, in the spirit of
+Claude Code and Codex.
 
-First, run the development server:
+## Run it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000, then add your keys under **API keys** (Ctrl+,):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Key | Used for |
+| --- | --- |
+| LLM (Anthropic, OpenAI, Gemini or Ollama Cloud) | the assistant |
+| CleanList | people search (free) and work emails (1 credit per email found) |
+| Composio | job search, sending email, the Google Sheets tracker |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Then connect accounts under **Connections** (plug icon): Gmail or Outlook to
+send, Google Sheets for the tracker, SerpAPI (optional) for Google Jobs.
 
-## Learn More
+Everything is stored locally in `.data/outreach.db` (SQLite), keys included.
 
-To learn more about Next.js, take a look at the following resources:
+## What it does
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **Jobs → people → email → send.** Results show as cards with buttons: *Find
+  recruiter* on a job, *Get email* on a person, *Write email* on a found email,
+  *Send / Don't send* on the email itself.
+- **Application tracker.** With Google Sheets connected, an "Outreach Tracker"
+  sheet keeps Jobs (with a Status column you can edit), Contacts and Emails up
+  to date automatically.
+- **Memory.** Facts about you that the assistant knows in every chat (like a
+  `CLAUDE.md`). Start a message with `#` to add one, open `/memory` to edit, or
+  just tell the assistant — it saves them itself.
+- **Knowledge base.** Upload your resume and notes; the assistant searches them
+  when writing.
+- **Context that stays small.** Older tool results are trimmed for the model,
+  `/compact` summarizes a long chat, and it auto-compacts near the limit. The
+  status line shows how full the context is.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Keyboard
 
-## Deploy on Vercel
+| Keys | Action |
+| --- | --- |
+| Ctrl/⌘ + 0 | New chat |
+| Ctrl/⌘ + K | Command palette (actions, chats, model switcher) |
+| Ctrl/⌘ + B | Show or hide the sidebar |
+| Ctrl/⌘ + / | All shortcuts and commands |
+| Ctrl/⌘ + , | API keys |
+| Alt + ↑ / ↓ | Previous / next chat |
+| Esc | Stop the assistant · decline a waiting email |
+| Ctrl/⌘ + Enter | Send the waiting email |
+| ↑ / ↓ in the chat box | Earlier prompts |
+| `/` | Commands: `/jobs`, `/recruiter`, `/email`, `/compact`, `/memory`, `/remember`, `/tracker`, `/model`, `/export`, `/help`… |
+| `#` | Remember a fact |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Messages typed while the assistant is working are queued and sent when it's
+done. Hover a message to copy it, retry the last answer, or edit your last
+message.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Code map
+
+- `src/app/page.tsx` — the chat UI; `src/components/` — cards, composer, palette, dialogs
+- `src/app/api/chat/route.ts` — the agent loop (AI SDK), memory and compaction
+- `src/lib/tools.ts` — the tools the model can call
+- `src/lib/composio.ts`, `src/lib/cleanlist.ts`, `src/lib/tracker.ts` — integrations
+- `src/lib/context.ts` — trimming, compaction and token estimates
+- `src/lib/db.ts` — SQLite storage

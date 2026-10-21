@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { chatContext } from "@/lib/context";
 import {
   createChat,
   deleteChat,
@@ -29,7 +30,10 @@ export async function DELETE(req: NextRequest) {
   return Response.json({ ok: true });
 }
 
-/** PUT /api/chats { id } -> { messages: UIMessage[] } (flattened for useChat) */
+/**
+ * PUT /api/chats { id } -> { messages: UIMessage[], context } — the thread for
+ * useChat, plus how full the model's context is.
+ */
 export async function PUT(req: NextRequest) {
   const body = (await req.json()) as { id?: string };
   if (!body.id) return Response.json({ error: "Missing id" }, { status: 400 });
@@ -39,6 +43,7 @@ export async function PUT(req: NextRequest) {
   touchChat(body.id);
   return Response.json({
     messages: rows.map((r) => r.data),
+    context: chatContext(body.id),
   });
 }
 

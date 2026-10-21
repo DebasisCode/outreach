@@ -136,6 +136,39 @@ export interface TrackerStatus {
   savedJobs: SavedJob[];
 }
 
+/** memory_save / memory_forget */
+export interface MemoryToolOutput {
+  saved?: boolean;
+  forgotten?: boolean;
+  /** The memory item's id (for Undo). */
+  id?: string;
+  fact?: string;
+  /** The text it replaced, when an item was updated. */
+  replaced?: string;
+  error?: string;
+}
+
+/** One remembered fact, as the Memory panel shows it. */
+export interface MemoryItem {
+  id: string;
+  content: string;
+  source: "user" | "assistant";
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** How full the model's context is (sent with each reply as a data part). */
+export interface ContextInfo {
+  /** Estimated tokens the next request sends. */
+  tokens: number;
+  /** Auto-compact threshold. */
+  limit: number;
+  /** Messages up to this id are summarized for the model. */
+  compactedUpto: string | null;
+  /** This request compacted the chat first. */
+  compacted?: boolean;
+}
+
 /** Keys that identify a job: its link, and its title at the company. */
 export function jobKeys(job: {
   url?: string | null;

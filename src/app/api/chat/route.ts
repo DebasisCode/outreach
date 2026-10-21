@@ -1,6 +1,3 @@
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createOpenAI } from "@ai-sdk/openai";
 import {
   convertToModelMessages,
   createUIMessageStream,
@@ -11,9 +8,28 @@ import {
   type UIMessage,
 } from "ai";
 import { NextRequest } from "next/server";
-import { getChat, getMessages, saveMessage, touchChat } from "@/lib/db";
-import { OLLAMA_CLOUD_BASE_URL, type UserKeys } from "@/lib/types";
+import {
+  AUTO_COMPACT_TOKENS,
+  compactChat,
+  estimateRequestTokens,
+  hasPendingApproval,
+  historyForModel,
+} from "@/lib/context";
+import {
+  clearChatSummary,
+  deleteMessagesNotIn,
+  getChat,
+  getChatSummary,
+  getMessages,
+  listMemories,
+  saveMessage,
+  touchChat,
+} from "@/lib/db";
+import { resolveModel } from "@/lib/models";
+import { systemPrompt } from "@/lib/prompt";
+import type { ContextInfo } from "@/lib/tool-outputs";
 import { APPROVAL_TOOLS, buildTools } from "@/lib/tools";
+import type { UserKeys } from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -21,57 +37,10 @@ interface ChatRequestBody {
   messages?: UIMessage[];
   chatId?: string | null;
   keys?: UserKeys;
-}
-
-function systemPrompt(): string {
-  return `You are a job-search outreach assistant. You help the user (1) find open roles, (2) find the right person at the company — a recruiter, talent/HR person, or the hiring manager, (3) get that person's work email, and (4) send a short, personal email from the user's own Gmail.
-
-Today is ${new Date().toDateString()}.
-
-Tools:
-- find_jobs: search open roles by keywords and location.
-- contacts_lookup: check first. The person and their email may already be known, and it shows who was already emailed (don't email the same person twice without asking).
-- cleanlist_find_people (free, ~60 searches/day): people at one company. Use the website domain when you know it (e.g. stripe.com), company_name only when you don't. Recruiters: departments ["People & HR"] with title_keywords ["recruit", "talent"]. Hiring managers: the team's department (e.g. "Engineering") with seniority ["Manager", "Director", "Head"].
-- cleanlist_enrich_person (1 CleanList credit, only charged when an email is found): get a work email. Pass the linkedin_url from cleanlist_find_people. Unless the user already named the person, recommend one and let them pick before paying. If it returns pending, use cleanlist_check_enrichment with the workflow_id.
-- knowledge_search: look up the user's resume and notes before writing, so the email is specific.
-- composio_send_email: sends from the user's connected Gmail/Outlook. When asked to write or draft an outreach email, call this with the finished email — the user reviews it in the app and clicks Send or Don't send. When the email is about a specific role, also pass job_title (and job_url if you have the posting link).
-- composio_create_draft: saves the email to the user's Gmail drafts instead — only when they ask for a draft.
-- tracker_save_job: save a job to the user's application tracker, or change its status — when they ask to save/track a job, or tell you they applied, interviewed, got an offer or were rejected.
-
-Application tracker: when Google Sheets is connected, the app keeps a Google Sheet ("Outreach Tracker") with tabs Jobs, Contacts and Emails. Jobs the user saves (or clicks Find recruiter on), people whose email was found, and every sent email are logged automatically — no tool call needed for those. Results show whether they were logged.
-
-How the app shows results:
-- Tool results appear as cards the user can click: people (with "Get email" buttons), jobs (with "Save" and "Find recruiter"), found emails (with "Write email"), and emails (with Send / Don't send). So don't repeat lists of people or jobs, and don't paste the email text in your reply. Add a line or two instead — e.g. who you'd pick and why.
-- Messages like "Get the work email for …", "Find the recruiter or hiring manager at …" or "Write a short outreach email to …" come from those buttons: they are the user's go-ahead, so do them right away.
-- If the user clicks Don't send (or Don't save), stop: don't retry and don't take any other mailbox action unless they ask. Ask what to change.
-
-Writing the email:
-- 80–150 words, plain text, a short specific subject line.
-- Name the role and company, one or two concrete qualifications from the user's background, and a clear, low-pressure ask.
-- No placeholders like [Your Name]. Use real details from knowledge_search, or ask the user.
-
-Rules:
-- Never invent email addresses. Use only ones from cleanlist_enrich_person or contacts_lookup.
-- Don't guess company domains when unsure. Ask, or search by company_name.
-- Be concise. Ask at most one clarifying question at a time.`;
-}
-
-function resolveModel(keys: UserKeys) {
-  switch (keys.llmProvider) {
-    case "openai":
-      return createOpenAI({ apiKey: keys.llmApiKey })(keys.llmModel);
-    case "google":
-      return createGoogleGenerativeAI({ apiKey: keys.llmApiKey })(keys.llmModel);
-    case "ollama":
-      // Ollama Cloud only implements /v1/chat/completions — its OpenAI-compat
-      // layer rejects the Responses API (unknown "item_reference" items).
-      return createOpenAI({
-        baseURL: OLLAMA_CLOUD_BASE_URL,
-        apiKey: keys.llmApiKey,
-      }).chat(keys.llmModel);
-    default:
-      return createAnthropic({ apiKey: keys.llmApiKey })(keys.llmModel);
-  }
+  /** "regenerate-message" when the user clicked Retry. */
+  trigger?: string;
+  /** The user edited an earlier message: what came after it is gone. */
+  rewind?: boolean;
 }
 
 function titleFrom(messages: UIMessage[]): string {
@@ -106,9 +75,16 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Chat not found — start a new chat." }, { status: 404 });
   }
 
+  const incoming = body.messages ?? [];
+  // Retry / Edit rewound the conversation: drop what the browser dropped.
+  if (body.trigger === "regenerate-message" || body.rewind) {
+    deleteMessagesNotIn(
+      chatId,
+      incoming.map((msg) => msg.id),
+    );
+  }
   // The browser sends the whole thread. Upsert every message, not just new
   // ones, so edits to existing messages (an answered Send approval) are kept.
-  const incoming = body.messages ?? [];
   for (const msg of incoming) {
     saveMessage(chatId, { id: msg.id, role: msg.role, data: msg });
   }
@@ -116,23 +92,61 @@ export async function POST(req: NextRequest) {
   // titles the user renamed.
   touchChat(chatId, chat.title === "New chat" ? titleFrom(incoming) : undefined);
 
-  const history = getMessages(chatId).map((m) => m.data as UIMessage);
+  const model = resolveModel(keys);
   const { tools } = buildTools(keys);
+  const memories = listMemories();
+  const stored = getMessages(chatId).map((m) => m.data as UIMessage);
+
+  let summary = getChatSummary(chatId);
+  // A rewind can remove the message a summary ended at; then it no longer fits.
+  if (summary && !stored.some((msg) => msg.id === summary?.upto)) {
+    clearChatSummary(chatId);
+    summary = null;
+  }
+
+  let history = historyForModel(stored, summary);
+  let system = systemPrompt({ memories, summary: history.summary });
+  let tokens = estimateRequestTokens(system, history.messages);
+  let compacted = false;
+  // Long chat: fold older turns into the summary before answering.
+  if (tokens > AUTO_COMPACT_TOKENS && !hasPendingApproval(stored)) {
+    try {
+      const result = await compactChat(model, chatId, { keepTurns: 2 });
+      if (result) {
+        summary = result;
+        history = historyForModel(stored, summary);
+        system = systemPrompt({ memories, summary: history.summary });
+        tokens = estimateRequestTokens(system, history.messages);
+        compacted = true;
+      }
+    } catch (err) {
+      console.error("Auto-compact failed; sending the full history:", err);
+    }
+  }
+
   // Drops tool calls left unfinished by a stopped/failed turn, which would
   // otherwise make the provider reject the whole history.
-  const modelMessages = await convertToModelMessages(history, {
+  const modelMessages = await convertToModelMessages(history.messages, {
     tools,
     ignoreIncompleteToolCalls: true,
   });
+  const context: ContextInfo = {
+    tokens,
+    limit: AUTO_COMPACT_TOKENS,
+    compactedUpto: history.summary ? (summary?.upto ?? null) : null,
+    compacted,
+  };
 
   const stream = createUIMessageStream({
     // Persistence mode: the response gets a stable id, and a reply to a Send
     // approval continues the same assistant message instead of a new one.
-    originalMessages: history,
+    originalMessages: stored,
     execute: ({ writer }) => {
+      // Context meter for the status line; not stored with the message.
+      writer.write({ type: "data-context", data: context, transient: true });
       const result = streamText({
-        model: resolveModel(keys),
-        instructions: systemPrompt(),
+        model,
+        instructions: system,
         messages: modelMessages,
         tools,
         // Nothing touches the user's mailbox until they click in the chat.

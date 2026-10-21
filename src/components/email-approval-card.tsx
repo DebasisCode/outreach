@@ -1,5 +1,6 @@
 "use client";
 
+import { Kbd } from "@/components/kbd";
 import { TrackerNote } from "@/components/tracker-note";
 import { Button } from "@/components/ui/button";
 import { parseToolOutput, type EmailToolOutput } from "@/lib/tool-outputs";
@@ -35,6 +36,8 @@ interface EmailApprovalCardProps {
   errorText?: string;
   /** Present only while this email is waiting for the user's decision. */
   onRespond?: (approved: boolean) => void;
+  /** Show Mac key names in the shortcut hints. */
+  mac?: boolean;
 }
 
 const Line = ({ children, tone = "muted" }: { children: ReactNode; tone?: "muted" | "ok" | "bad" }) => (
@@ -63,6 +66,7 @@ export function EmailApprovalCard({
   output,
   errorText,
   onRespond,
+  mac = false,
 }: EmailApprovalCardProps) {
   const result = parseToolOutput<EmailToolOutput>(output) ?? {};
   const succeeded = mode === "send" ? result.sent === true : result.drafted === true;
@@ -75,10 +79,16 @@ export function EmailApprovalCard({
       <div className="flex items-center justify-end gap-2">
         <Button onClick={() => onRespond(false)} size="sm" variant="ghost">
           <BanIcon /> {mode === "send" ? "Don't send" : "Don't save"}
+          <Kbd className="ml-1 hidden h-4.5 sm:inline-flex" keys={["esc"]} mac={mac} />
         </Button>
         <Button onClick={() => onRespond(true)} size="sm">
           {mode === "send" ? <SendIcon /> : <FileTextIcon />}
           {mode === "send" ? "Send email" : "Save to drafts"}
+          <Kbd
+            className="bg-primary-foreground/15 text-primary-foreground ml-1 hidden h-4.5 border-transparent sm:inline-flex"
+            keys={["mod", "enter"]}
+            mac={mac}
+          />
         </Button>
       </div>
     );

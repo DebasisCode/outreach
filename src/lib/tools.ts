@@ -1,12 +1,16 @@
 ﻿import {
+  addMemory,
   allKnowledge,
+  deleteMemory,
   findKnownEmail,
+  findMemory,
   ftsSearchKnowledge,
   getContactByEmail,
   markJobEmailed,
   recordEmail,
   saveJob,
   searchContacts,
+  updateMemory,
   upsertContact,
 } from "@/lib/db";
 import {
@@ -36,6 +40,7 @@ import type {
   FindJobsOutput,
   FindPeopleOutput,
   JobResult,
+  MemoryToolOutput,
   SaveJobOutput,
   TrackerFields,
 } from "@/lib/tool-outputs";
@@ -52,6 +57,7 @@ import { JOB_STATUSES, type UserKeys } from "@/lib/types";
  *                                route makes this wait for the user's click
  *  - composio_create_draft       save to the user's drafts instead
  *  - tracker_save_job            save a job / its status to the tracker
+ *  - memory_save / memory_forget facts about the user, always in context
  *  - knowledge_search / contacts_lookup / save_contact   local memory
  *
  * Found contacts, saved jobs and sent emails are also copied to the user's
@@ -282,6 +288,28 @@ const SaveJobSchema = jsonSchema<{
   required: ["title", "company"],
 });
 
+const MemorySaveSchema = jsonSchema<{ fact: string; replaces?: string }>({
+  type: "object",
+  properties: {
+    fact: {
+      type: "string",
+      description:
+        "One short, lasting fact about the user, e.g. 'Targets senior backend roles in Bangalore or remote' or 'Signs emails as Debasis'",
+    },
+    replaces: {
+      type: "string",
+      description: "Id of an outdated memory item this fact replaces, e.g. 'a1b2c3'",
+    },
+  },
+  required: ["fact"],
+});
+
+const MemoryForgetSchema = jsonSchema<{ id: string }>({
+  type: "object",
+  properties: { id: { type: "string", description: "Id of the memory item, e.g. 'a1b2c3'" } },
+  required: ["id"],
+});
+
 /** "applied" -> "Applied"; anything else -> null. */
 function jobStatus(value: string | undefined): string | null {
   const wanted = value?.trim().toLowerCase();
@@ -369,6 +397,8 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
     "contacts_lookup",
     "save_contact",
     "tracker_save_job",
+    "memory_save",
+    "memory_forget",
   ];
   const composioUserId = keys.composioUserId?.trim() || "default";
   const composioKey = keys.composioApiKey?.trim() ?? "";
@@ -463,6 +493,46 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
       return saved
         ? `Saved contact ${saved.name} (${saved.email ?? "no email"}).`
         : "Could not save — need an email or a LinkedIn URL.";
+    },
+  };
+
+  tools.memory_save = {
+    description:
+      "Remember a lasting fact about the user for future chats: background, skills, target roles and locations, preferences for emails (tone, length, sign-off), constraints. One short fact per call. Pass replaces=<id> to update an outdated item from Memory. Not for one-off task details, secrets, or contacts/jobs (those are stored already).",
+    inputSchema: MemorySaveSchema,
+    execute: async (input) => {
+      try {
+        const outdated = input.replaces ? findMemory(input.replaces) : null;
+        if (outdated) {
+          const updated = updateMemory(outdated.id, input.fact);
+          const output: MemoryToolOutput = compact({
+            saved: true,
+            id: updated?.id,
+            fact: updated?.content,
+            replaced: outdated.content,
+          });
+          return JSON.stringify(output);
+        }
+        const memory = addMemory(input.fact, "assistant");
+        const output: MemoryToolOutput = { saved: true, id: memory.id, fact: memory.content };
+        return JSON.stringify(output);
+      } catch (err) {
+        const failed: MemoryToolOutput = { error: errorMessage(err) };
+        return JSON.stringify(failed);
+      }
+    },
+  };
+
+  tools.memory_forget = {
+    description: "Forget a memory item the user says is wrong or no longer true.",
+    inputSchema: MemoryForgetSchema,
+    execute: async (input) => {
+      const memory = findMemory(input.id);
+      const output: MemoryToolOutput =
+        memory && deleteMemory(memory.id)
+          ? { forgotten: true, id: memory.id, fact: memory.content }
+          : { error: `No memory item "${input.id}".` };
+      return JSON.stringify(output);
     },
   };
 

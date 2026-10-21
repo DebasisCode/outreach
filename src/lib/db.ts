@@ -13,6 +13,7 @@ import crypto from "node:crypto";
  *  - emails          log of sent emails (via Composio)
  *  - jobs            jobs the user saved or reached out about
  *  - settings        small key/value store (e.g. the tracker spreadsheet)
+ *  - memories        short facts about the user, always in the AI's context
  *  - knowledge       RAG chunks: text + embedding (JSON) + FTS row
  *
  * contacts, emails and jobs carry `synced_at`: when the row was last copied
@@ -107,6 +108,13 @@ db.exec(`
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS memories (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
 `);
 
 /** Add a column to a table created by an older version of the app. */
@@ -120,6 +128,10 @@ ensureColumn("contacts", "synced_at", "INTEGER");
 ensureColumn("emails", "job_id", "TEXT");
 ensureColumn("emails", "from_address", "TEXT");
 ensureColumn("emails", "synced_at", "INTEGER");
+// A compacted chat: the summary stands in for messages up to summary_upto.
+ensureColumn("chats", "summary", "TEXT");
+ensureColumn("chats", "summary_upto", "TEXT");
+ensureColumn("chats", "summary_at", "INTEGER");
 
 const now = () => Date.now();
 const uuid = () => crypto.randomUUID();
@@ -243,6 +255,62 @@ export function saveMessage(chatId: string, msg: StoredMessage): void {
     `INSERT INTO messages (chat_id, id, role, data, created_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(chat_id, id) DO UPDATE SET role = excluded.role, data = excluded.data`,
   ).run(chatId, msg.id, msg.role, JSON.stringify(msg.data), now());
+}
+
+/**
+ * Drop stored messages the browser no longer has — after Retry or Edit
+ * rewound the conversation. Returns how many were removed.
+ */
+export function deleteMessagesNotIn(chatId: string, keepIds: string[]): number {
+  const keep = new Set(keepIds);
+  const stored = db.prepare("SELECT id FROM messages WHERE chat_id = ?").all(chatId) as Array<{
+    id: string;
+  }>;
+  const remove = db.prepare("DELETE FROM messages WHERE chat_id = ? AND id = ?");
+  let removed = 0;
+  for (const row of stored) {
+    if (!keep.has(row.id)) {
+      remove.run(chatId, row.id);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+// ---------- chat compaction ----------
+
+export interface CompactionSummary {
+  summary: string;
+  /** Id of the last message the summary covers. */
+  upto: string;
+  at: number;
+}
+
+export function getChatSummary(chatId: string): CompactionSummary | null {
+  const row = db
+    .prepare("SELECT summary, summary_upto, summary_at FROM chats WHERE id = ?")
+    .get(chatId) as Record<string, unknown> | undefined;
+  if (!row?.summary || !row.summary_upto) return null;
+  return {
+    summary: String(row.summary),
+    upto: String(row.summary_upto),
+    at: Number(row.summary_at ?? 0),
+  };
+}
+
+export function setChatSummary(chatId: string, summary: string, upto: string): void {
+  db.prepare("UPDATE chats SET summary = ?, summary_upto = ?, summary_at = ? WHERE id = ?").run(
+    summary,
+    upto,
+    now(),
+    chatId,
+  );
+}
+
+export function clearChatSummary(chatId: string): void {
+  db.prepare(
+    "UPDATE chats SET summary = NULL, summary_upto = NULL, summary_at = NULL WHERE id = ?",
+  ).run(chatId);
 }
 
 export function getMessages(chatId: string): StoredMessage[] {
@@ -797,6 +865,92 @@ export function resetTrackerSync(kinds: Array<keyof typeof SYNCED_TABLES> = ["jo
         : `UPDATE ${SYNCED_TABLES[kind]} SET synced_at = NULL`,
     );
   }
+}
+
+// ---------- memory (facts about the user, always in context) ----------
+
+export interface MemoryRow {
+  id: string;
+  content: string;
+  /** "user": typed with # or in the Memory panel · "assistant": saved by the AI */
+  source: "user" | "assistant";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const MEMORY_MAX_ITEMS = 60;
+export const MEMORY_MAX_CHARS = 400;
+
+const rowToMemory = (r: Record<string, unknown>): MemoryRow => ({
+  id: String(r.id),
+  content: String(r.content),
+  source: r.source === "assistant" ? "assistant" : "user",
+  createdAt: Number(r.created_at),
+  updatedAt: Number(r.updated_at),
+});
+
+/** Oldest first, so the list reads the same in every prompt. */
+export function listMemories(): MemoryRow[] {
+  const rows = db
+    .prepare("SELECT * FROM memories ORDER BY created_at ASC")
+    .all() as Array<Record<string, unknown>>;
+  return rows.map(rowToMemory);
+}
+
+/** By full id, or by the short id shown to the model (its first characters). */
+export function findMemory(idOrPrefix: string): MemoryRow | null {
+  const key = idOrPrefix.trim().replace(/^\[|\]$/g, "");
+  if (!key) return null;
+  const rows = db
+    .prepare("SELECT * FROM memories WHERE id = ? OR id LIKE ? LIMIT 2")
+    .all(key, `${key}%`) as Array<Record<string, unknown>>;
+  const exact = rows.find((r) => r.id === key);
+  if (exact) return rowToMemory(exact);
+  return rows.length === 1 ? rowToMemory(rows[0]) : null;
+}
+
+function cleanMemory(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, MEMORY_MAX_CHARS);
+}
+
+/** Add a fact; the same fact again just refreshes it. */
+export function addMemory(content: string, source: MemoryRow["source"]): MemoryRow {
+  const text = cleanMemory(content);
+  if (!text) throw new Error("Memory can't be empty.");
+  const existing = db
+    .prepare("SELECT * FROM memories WHERE lower(content) = ?")
+    .get(text.toLowerCase()) as Record<string, unknown> | undefined;
+  if (existing) {
+    db.prepare("UPDATE memories SET updated_at = ? WHERE id = ?").run(now(), String(existing.id));
+    return rowToMemory({ ...existing, updated_at: now() });
+  }
+  const count = Number((db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number }).n);
+  if (count >= MEMORY_MAX_ITEMS) {
+    throw new Error(
+      `Memory is full (${MEMORY_MAX_ITEMS} items). Replace or remove an outdated item first.`,
+    );
+  }
+  const id = uuid();
+  const t = now();
+  db.prepare(
+    "INSERT INTO memories (id, content, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(id, text, source, t, t);
+  return { id, content: text, source, createdAt: t, updatedAt: t };
+}
+
+export function updateMemory(id: string, content: string): MemoryRow | null {
+  const text = cleanMemory(content);
+  if (!text) throw new Error("Memory can't be empty.");
+  db.prepare("UPDATE memories SET content = ?, updated_at = ? WHERE id = ?").run(text, now(), id);
+  const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? rowToMemory(row) : null;
+}
+
+export function deleteMemory(id: string): boolean {
+  const result = db.prepare("DELETE FROM memories WHERE id = ?").run(id);
+  return Number(result.changes) > 0;
 }
 
 // ---------- knowledge (RAG) ----------

@@ -13,6 +13,7 @@ import {
   type FindJobsOutput,
   type FindPeopleOutput,
   type JobResult,
+  type MemoryToolOutput,
   type PersonResult,
   type SaveJobOutput,
 } from "@/lib/tool-outputs";
@@ -26,6 +27,7 @@ import {
 import {
   BookmarkCheckIcon,
   BookmarkPlusIcon,
+  BrainIcon,
   BriefcaseBusinessIcon,
   CheckCircle2Icon,
   CheckIcon,
@@ -69,6 +71,8 @@ export interface CardContext {
   onSaveJob: (job: JobResult, source?: string) => Promise<void>;
   /** Google Sheets is connected, so saved jobs land in the sheet. */
   trackerConnected: boolean;
+  /** Undo a memory the assistant just saved. */
+  onForgetMemory: (id: string) => Promise<void>;
 }
 
 const ENRICH_TOOLS = new Set(["cleanlist_enrich_person", "cleanlist_check_enrichment"]);
@@ -688,6 +692,42 @@ function ContactsCard({
   );
 }
 
+function MemoryLine({ output, ctx }: { output: MemoryToolOutput; ctx: CardContext }) {
+  const [undone, setUndone] = useState(false);
+  return (
+    <div className="not-prose text-muted-foreground mb-3 flex items-start gap-2 text-xs">
+      <BrainIcon className="mt-px size-3.5 shrink-0" />
+      <span className="min-w-0">
+        {undone ? (
+          <span className="line-through">{output.fact}</span>
+        ) : output.replaced ? (
+          <>
+            Updated memory: <span className="text-foreground">{output.fact}</span>
+            <span className="opacity-70"> (was: {output.replaced})</span>
+          </>
+        ) : (
+          <>
+            Remembered: <span className="text-foreground">{output.fact}</span>
+          </>
+        )}
+      </span>
+      {!undone && !output.replaced && output.id ? (
+        <button
+          className="hover:text-foreground shrink-0 underline-offset-2 hover:underline"
+          onClick={() => {
+            const id = output.id;
+            if (!id) return;
+            void ctx.onForgetMemory(id).then(() => setUndone(true));
+          }}
+          type="button"
+        >
+          Undo
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 // ---------- dispatcher ----------
 
 function runningLabel(name: string, input: Record<string, unknown>): string {
@@ -713,6 +753,10 @@ function runningLabel(name: string, input: Record<string, unknown>): string {
       return "Saving contact…";
     case "tracker_save_job":
       return "Saving the job to your tracker…";
+    case "memory_save":
+      return "Saving to memory…";
+    case "memory_forget":
+      return "Updating memory…";
     default:
       return `Running ${name}…`;
   }
@@ -749,6 +793,16 @@ export function ToolResultCard({ part, ctx }: { part: AnyToolPart; ctx: CardCont
       return parsed ? <EnrichmentCard ctx={ctx} output={parsed as EnrichOutput} /> : null;
     case "find_jobs":
       return parsed ? <JobsCard ctx={ctx} output={parsed as FindJobsOutput} /> : null;
+    case "memory_save":
+      return parsed ? <MemoryLine ctx={ctx} output={parsed as MemoryToolOutput} /> : null;
+    case "memory_forget": {
+      const forgot = (parsed ?? {}) as MemoryToolOutput;
+      return (
+        <StatusLine state="done">
+          Forgot: <span className="line-through">{forgot.fact ?? "a memory item"}</span>
+        </StatusLine>
+      );
+    }
     case "tracker_save_job": {
       const saved = (parsed ?? {}) as SaveJobOutput;
       return (
