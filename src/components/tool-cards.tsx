@@ -1,5 +1,6 @@
 "use client";
 
+import { ApplicationCard } from "@/components/application-cards";
 import { TrackerNote } from "@/components/tracker-note";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,8 @@ import {
   jobKeys,
   linkedinKey,
   parseToolOutput,
+  type ApplicationOutput,
+  type BrowseOutput,
   type ContactResult,
   type ContactsLookupOutput,
   type EnrichOutput,
@@ -30,6 +33,7 @@ import {
   BrainIcon,
   BriefcaseBusinessIcon,
   CheckCircle2Icon,
+  ClipboardPenIcon,
   CheckIcon,
   CircleAlertIcon,
   CopyIcon,
@@ -100,6 +104,11 @@ function draftMessage(contact: { name?: string; title?: string; company?: string
   return `Write a short outreach email to ${contact.name ?? contact.email}${
     role ? ` (${role})` : ""
   } at ${contact.email}.`;
+}
+
+function applyMessage(job: JobResult) {
+  const where = job.company ? ` at ${job.company}` : "";
+  return `Apply to the "${job.title ?? "this"}" role${where} — ${job.apply_url ?? job.url}`;
 }
 
 function findRecruiterMessage(job: JobResult) {
@@ -563,6 +572,20 @@ function JobsCard({ output, ctx }: { output: FindJobsOutput; ctx: CardContext })
                 >
                   <UserSearchIcon /> Find recruiter
                 </Button>
+                {job.apply_url || job.url ? (
+                  <Button
+                    disabled={ctx.disabled}
+                    onClick={() => {
+                      if (!status) void ctx.onSaveJob(job, output.source);
+                      ctx.onAction(applyMessage(job));
+                    }}
+                    size="xs"
+                    title="Fill in the application in a browser window — you review it before it's submitted"
+                    variant="outline"
+                  >
+                    <ClipboardPenIcon /> Apply
+                  </Button>
+                ) : null}
                 {status ? (
                   <Badge
                     className="rounded-full text-[10px]"
@@ -757,6 +780,20 @@ function runningLabel(name: string, input: Record<string, unknown>): string {
       return "Saving to memory…";
     case "memory_forget":
       return "Updating memory…";
+    case "browser_apply_start":
+      return `Opening the application${text("company") ? ` at ${text("company")}` : ""} in the browser and filling it in…`;
+    case "browser_apply_fill":
+      return "Filling in answers…";
+    case "browser_apply_next":
+      return "Going to the next page of the application…";
+    case "browser_apply_check":
+      return "Looking at the application again…";
+    case "applicant_profile_save":
+      return "Saving to your Applicant profile…";
+    case "browser_open":
+      return text("url") ? `Opening ${text("url")}…` : "Reading the page…";
+    case "browser_act":
+      return "Working in the browser…";
     default:
       return `Running ${name}…`;
   }
@@ -800,6 +837,36 @@ export function ToolResultCard({ part, ctx }: { part: AnyToolPart; ctx: CardCont
       return (
         <StatusLine state="done">
           Forgot: <span className="line-through">{forgot.fact ?? "a memory item"}</span>
+        </StatusLine>
+      );
+    }
+    case "browser_apply_start":
+    case "browser_apply_fill":
+    case "browser_apply_next":
+    case "browser_apply_check":
+      return parsed ? (
+        <ApplicationCard disabled={ctx.disabled} onAction={ctx.onAction} output={parsed as ApplicationOutput} />
+      ) : null;
+    case "applicant_profile_save": {
+      const saved = (parsed ?? {}) as { saved?: string[] };
+      return (
+        <StatusLine state="done">
+          {saved.saved?.length ? `Saved to your Applicant profile: ${saved.saved.join(", ")}` : "Applicant profile unchanged"}
+        </StatusLine>
+      );
+    }
+    case "browser_open":
+    case "browser_act": {
+      const page = (parsed ?? {}) as BrowseOutput;
+      return (
+        <StatusLine state="done">
+          {page.did ? `${page.did} ` : ""}
+          {page.url ? (
+            <a className="hover:underline" href={page.url} rel="noopener noreferrer" target="_blank">
+              {page.title || page.url}
+            </a>
+          ) : null}
+          {page.blocker ? <span className="text-amber-700 dark:text-amber-500"> — {page.blocker}</span> : null}
         </StatusLine>
       );
     }

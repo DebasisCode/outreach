@@ -15,6 +15,7 @@ import crypto from "node:crypto";
  *  - settings        small key/value store (e.g. the tracker spreadsheet)
  *  - memories        short facts about the user, always in the AI's context
  *  - knowledge       RAG chunks: text + embedding (JSON) + FTS row
+ *  - applications    job applications filled in the browser (see applications.ts)
  *
  * contacts, emails and jobs carry `synced_at`: when the row was last copied
  * to the Google Sheet tracker (see tracker.ts).
@@ -25,7 +26,13 @@ const DB_PATH =
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
+/** Folder for the app's local files (database, resume, screenshots). */
+export const DATA_DIR = path.dirname(DB_PATH);
+
 export const db = new DatabaseSync(DB_PATH);
+// Several processes (build workers, the dev server) can open the file at
+// once: wait for a lock instead of failing with "database is locked".
+db.exec("PRAGMA busy_timeout = 10000");
 
 db.exec(`
   PRAGMA journal_mode = WAL;
@@ -108,6 +115,24 @@ db.exec(`
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS applications (
+    id TEXT PRIMARY KEY,
+    job_url TEXT NOT NULL,
+    job_id TEXT,
+    title TEXT,
+    company TEXT,
+    ats TEXT,
+    url TEXT,
+    status TEXT NOT NULL,
+    answers TEXT NOT NULL DEFAULT '{}',
+    summary TEXT,
+    note TEXT,
+    screenshot TEXT,
+    submitted_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS applications_job_url_idx ON applications(job_url);
   CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
@@ -725,6 +750,11 @@ export function markJobEmailed(jobId: string): void {
   ).run(now(), jobId);
 }
 
+/** Set a job's status (e.g. "Applied" once an application went through). */
+export function setJobStatus(jobId: string, status: string): void {
+  db.prepare("UPDATE jobs SET status = ?, status_explicit = 1, updated_at = ? WHERE id = ?").run(status, now(), jobId);
+}
+
 // ---------- tracker sync: rows the Google Sheet doesn't have yet ----------
 
 export interface TrackerJobRow extends JobRow {
@@ -1046,4 +1076,127 @@ export function knowledgeCount(): number {
     c: number;
   };
   return Number(row.c);
+}
+// ---------- applications (filled in the browser) ----------
+
+export type ApplicationStatus =
+  | "in_progress"
+  | "needs_answers"
+  | "needs_user"
+  | "next_page"
+  | "ready_to_submit"
+  | "submitted"
+  | "failed";
+
+export interface ApplicationRow {
+  id: string;
+  /** The link the application started from. */
+  jobUrl: string;
+  jobId: string | null;
+  title: string | null;
+  company: string | null;
+  ats: string | null;
+  /** Where the browser is now (the form, a later step…). */
+  url: string | null;
+  status: ApplicationStatus;
+  /** Field id -> value, so a closed or crashed window can be refilled. */
+  answers: Record<string, string>;
+  /** Last view of the form, for the review card (JSON from applications.ts). */
+  summary: unknown;
+  note: string | null;
+  /** File name of the latest screenshot, under DATA_DIR/applications. */
+  screenshot: string | null;
+  submittedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string" || !value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+const rowToApplication = (r: Record<string, unknown>): ApplicationRow => ({
+  id: String(r.id),
+  jobUrl: String(r.job_url),
+  jobId: text(r.job_id),
+  title: text(r.title),
+  company: text(r.company),
+  ats: text(r.ats),
+  url: text(r.url),
+  status: String(r.status) as ApplicationStatus,
+  answers: parseJson<Record<string, string>>(r.answers, {}),
+  summary: parseJson<unknown>(r.summary, null),
+  note: text(r.note),
+  screenshot: text(r.screenshot),
+  submittedAt: r.submitted_at == null ? null : Number(r.submitted_at),
+  createdAt: Number(r.created_at),
+  updatedAt: Number(r.updated_at),
+});
+
+export function createApplication(input: {
+  jobUrl: string;
+  jobId?: string | null;
+  title?: string | null;
+  company?: string | null;
+}): ApplicationRow {
+  const id = uuid().replace(/-/g, "").slice(0, 12);
+  const t = now();
+  db.prepare(
+    `INSERT INTO applications (id, job_url, job_id, title, company, status, answers, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'in_progress', '{}', ?, ?)`,
+  ).run(id, input.jobUrl, input.jobId ?? null, input.title ?? null, input.company ?? null, t, t);
+  return getApplication(id) as ApplicationRow;
+}
+
+export function getApplication(id: string): ApplicationRow | null {
+  const row = db.prepare("SELECT * FROM applications WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? rowToApplication(row) : null;
+}
+
+/** The latest application started from this link. */
+export function findApplicationByJobUrl(jobUrl: string): ApplicationRow | null {
+  const row = db
+    .prepare("SELECT * FROM applications WHERE job_url = ? ORDER BY (status = 'submitted') DESC, updated_at DESC LIMIT 1")
+    .get(jobUrl) as Record<string, unknown> | undefined;
+  return row ? rowToApplication(row) : null;
+}
+
+export function listApplications(limit = 50): ApplicationRow[] {
+  const rows = db
+    .prepare("SELECT * FROM applications ORDER BY updated_at DESC LIMIT ?")
+    .all(limit) as Array<Record<string, unknown>>;
+  return rows.map(rowToApplication);
+}
+
+export function updateApplication(
+  id: string,
+  patch: Partial<Pick<ApplicationRow, "jobId" | "title" | "company" | "ats" | "url" | "status" | "answers" | "summary" | "note" | "screenshot" | "submittedAt">>,
+): ApplicationRow | null {
+  const current = getApplication(id);
+  if (!current) return null;
+  const next = { ...current, ...patch };
+  db.prepare(
+    `UPDATE applications SET job_id = ?, title = ?, company = ?, ats = ?, url = ?, status = ?, answers = ?,
+       summary = ?, note = ?, screenshot = ?, submitted_at = ?, updated_at = ? WHERE id = ?`,
+  ).run(
+    next.jobId,
+    next.title,
+    next.company,
+    next.ats,
+    next.url,
+    next.status,
+    JSON.stringify(next.answers ?? {}),
+    next.summary == null ? null : JSON.stringify(next.summary),
+    next.note,
+    next.screenshot,
+    next.submittedAt,
+    now(),
+    id,
+  );
+  return getApplication(id);
 }

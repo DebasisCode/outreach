@@ -33,6 +33,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Write an outreach email",
     prompt: (args) => `Write a short outreach email to ${args}.`,
   },
+  {
+    name: "apply",
+    args: "<job link>",
+    description: "Fill in a job application in the browser (you approve before it's submitted)",
+    prompt: (args) => `Apply to this job: ${args}`,
+  },
+  { name: "profile", description: "Applicant profile & resume used for applications" },
   { name: "compact", args: "[focus]", description: "Summarize this chat to free up context" },
   { name: "memory", description: "See and edit what the assistant remembers about you" },
   { name: "remember", args: "<fact>", description: "Save a fact to memory (same as # fact)" },

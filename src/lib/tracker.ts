@@ -736,7 +736,7 @@ export function rememberPostings(source: "google_jobs" | "dice", postings: JobPo
   for (const posting of postings) {
     if (!posting.url) continue;
     recentPostings.delete(posting.url);
-    recentPostings.set(posting.url, {
+    const input: JobInput = {
       title: posting.title,
       url: posting.url,
       company: posting.company,
@@ -746,7 +746,10 @@ export function rememberPostings(source: "google_jobs" | "dice", postings: JobPo
       employmentType: posting.employmentType,
       remote: posting.remote,
       source: sourceLabel(source, posting.postedBy),
-    });
+    };
+    recentPostings.set(posting.url, input);
+    // Applying starts from the employer's link: it's the same job.
+    if (posting.applyUrl) recentPostings.set(posting.applyUrl, input);
   }
   while (recentPostings.size > RECENT_POSTINGS_MAX) {
     const oldest = recentPostings.keys().next().value;

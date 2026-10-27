@@ -1,0 +1,106 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Senior Backend Engineer - Acme (Greenhouse-style)</title>
+<style>
+  .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .select__menu{border:1px solid #ccc;background:#fff}
+  .select__option{padding:4px}
+  .hp{position:absolute;left:-9999px}
+  .field{margin:10px 0}
+</style></head>
+<body>
+<h1>Senior Backend Engineer</h1>
+<div id="application">
+<form id="application-form" novalidate>
+  <div class="field"><label for="first_name">First Name<span class="asterisk">*</span></label><input id="first_name" name="first_name" type="text" aria-required="true"></div>
+  <div class="field"><label for="last_name">Last Name<span class="asterisk">*</span></label><input id="last_name" name="last_name" type="text" aria-required="true"></div>
+  <div class="field"><label for="email">Email<span class="asterisk">*</span></label><input id="email" name="email" type="text" aria-required="true"></div>
+  <div class="field"><label for="phone">Phone</label><input id="phone" name="phone" type="tel"></div>
+  <div class="field"><input class="hp" name="website_confirm" id="hp" type="text" tabindex="-1" autocomplete="off"></div>
+  <div class="field">
+    <label id="candidate-location-label" for="candidate-location">Location (City)<span class="asterisk">*</span></label>
+    <div class="select-shell" id="loc-shell"></div>
+  </div>
+  <div class="field" id="resume-field">
+    <div class="label">Resume/CV<span class="asterisk">*</span></div>
+    <input class="visually-hidden" id="resume" name="resume" type="file" accept=".pdf,.doc,.docx,.txt" aria-required="true">
+    <button type="button" onclick="document.getElementById('resume').click()">Attach</button>
+    <button type="button">Dropbox</button>
+    <span id="resume-name"></span>
+  </div>
+  <div class="field"><label for="linkedin">LinkedIn Profile</label><input id="linkedin" name="question_1" type="text"></div>
+  <div class="field">
+    <label id="auth-label" for="auth-input">Are you legally authorized to work in the United States?<span class="asterisk">*</span></label>
+    <div class="select-shell" id="auth-shell"></div>
+  </div>
+  <div class="field"><label for="why">Why do you want to work at Acme?<span class="asterisk">*</span></label><textarea id="why" name="question_2" aria-required="true"></textarea></div>
+  <div class="field"><label for="referrer_email">Referrer email</label><input id="referrer_email" name="question_3" type="text"></div>
+  <h3>Voluntary Self-Identification</h3>
+  <div class="field"><label for="gender">Gender</label>
+    <select id="gender" name="gender"><option value="">Please select</option><option value="1">Male</option><option value="2">Female</option><option value="3">Decline To Self Identify</option></select></div>
+  <div class="field"><label for="veteran">Veteran Status</label>
+    <select id="veteran" name="veteran"><option value="">Please select</option><option value="1">I am a veteran</option><option value="2">I am not a protected veteran</option><option value="3">I don't wish to answer</option></select></div>
+  <div class="field"><label><input type="checkbox" id="consent" name="consent" required> I agree to the processing of my data per the privacy policy</label></div>
+  <div id="errors" role="alert"></div>
+  <button type="submit" id="submit_app">Submit application</button>
+</form>
+</div>
+<div id="thanks" hidden><h2>Thank you for applying.</h2><p>Your application has been received.</p></div>
+<script>
+// A small React-Select-style combobox: input[role=combobox], menu rendered on open.
+function combobox(shell, id, labelId, getOptions, asyncDelay) {
+  shell.innerHTML = '<div class="select__control"><div class="select__value-container"><div class="select__placeholder">Select...</div><div class="select__input-container"><input id="' + id + '" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-labelledby="' + labelId + '" autocomplete="off"></div></div></div>';
+  var input = shell.querySelector("input"), vc = shell.querySelector(".select__value-container");
+  var menu = null, value = null;
+  function close() { if (menu) { menu.remove(); menu = null; } input.setAttribute("aria-expanded", "false"); }
+  function render(list) {
+    close();
+    menu = document.createElement("div"); menu.className = "select__menu"; menu.id = id + "-listbox"; menu.setAttribute("role", "listbox");
+    list.forEach(function (o, i) {
+      var d = document.createElement("div"); d.className = "select__option"; d.setAttribute("role", "option"); d.id = id + "-option-" + i; d.textContent = o;
+      d.addEventListener("mousedown", function (e) { e.preventDefault(); choose(o); });
+      d.addEventListener("click", function () { choose(o); });
+      menu.appendChild(d);
+    });
+    input.setAttribute("aria-controls", menu.id);
+    shell.appendChild(menu); input.setAttribute("aria-expanded", "true");
+  }
+  function choose(o) {
+    value = o; input.value = ""; close();
+    var ph = vc.querySelector(".select__placeholder, .select__single-value");
+    ph.className = "select__single-value"; ph.textContent = o;
+    shell.dataset.value = o;
+  }
+  function open() {
+    var q = input.value;
+    if (asyncDelay) { if (q.length < 2) { close(); return; } setTimeout(function () { if (input.value === q) render(getOptions(q)); }, asyncDelay); }
+    else render(getOptions(q));
+  }
+  input.addEventListener("focus", function () { if (!asyncDelay) open(); });
+  shell.querySelector(".select__control").addEventListener("mousedown", function (e) { if (e.target !== input) { e.preventDefault(); input.focus(); open(); } });
+  input.addEventListener("input", open);
+  input.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+  input.addEventListener("blur", function () { setTimeout(close, 100); });
+}
+var CITIES = ["Bengaluru, Karnataka, India", "Bengaluru Rural, Karnataka, India", "Bangalore East, India", "Berlin, Germany", "Boston, Massachusetts, United States"];
+combobox(document.getElementById("loc-shell"), "candidate-location", "candidate-location-label", function (q) {
+  return CITIES.filter(function (c) { return c.toLowerCase().indexOf(q.toLowerCase().split(",")[0]) >= 0; });
+}, 300);
+combobox(document.getElementById("auth-shell"), "auth-input", "auth-label", function (q) {
+  return ["Yes", "No"].filter(function (o) { return o.toLowerCase().indexOf(q.toLowerCase()) === 0; });
+}, 0);
+document.getElementById("resume").addEventListener("change", function (e) { document.getElementById("resume-name").textContent = e.target.files[0] ? e.target.files[0].name : ""; });
+document.getElementById("application-form").addEventListener("submit", function (e) {
+  e.preventDefault();
+  var missing = [];
+  if (!first_name.value) missing.push("First Name"); if (!last_name.value) missing.push("Last Name");
+  if (!/@/.test(email.value)) missing.push("Email"); if (!document.getElementById("resume").files.length) missing.push("Resume");
+  if (!document.getElementById("auth-shell").dataset.value) missing.push("Work authorization");
+  if (!document.getElementById("loc-shell").dataset.value) missing.push("Location");
+  if (!why.value) missing.push("Why Acme");
+  if (!consent.checked) missing.push("Consent");
+  if (document.getElementById("hp").value) missing.push("BOT");
+  if (missing.length) { document.getElementById("errors").textContent = "Please complete: " + missing.join(", "); return; }
+  document.getElementById("application").remove(); document.getElementById("thanks").hidden = false;
+});
+</script>
+</body></html>

@@ -13,6 +13,12 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import { PromptInputButton } from "@/components/ai-elements/prompt-input";
+import { ApplicantDialog } from "@/components/applicant-dialog";
+import {
+  ApplicationSubmitCard,
+  BrowserActApprovalCard,
+  findBrowseElement,
+} from "@/components/application-cards";
 import { ChatSidebar, type ChatSummary } from "@/components/chat-sidebar";
 import { CommandPalette, type PaletteAction } from "@/components/command-palette";
 import { Composer } from "@/components/composer";
@@ -41,6 +47,7 @@ import { formatKeys } from "@/lib/shortcuts";
 import {
   jobKeys,
   parseToolOutput,
+  type ApplicationOutput,
   type ContextInfo,
   type EmailToolOutput,
   type JobResult,
@@ -67,7 +74,9 @@ import {
   CopyIcon,
   DownloadIcon,
   FileSpreadsheetIcon,
+  ClipboardPenIcon,
   HashIcon,
+  IdCardIcon,
   KeyboardIcon,
   KeySquareIcon,
   MailIcon,
@@ -115,6 +124,20 @@ const EMAIL_TOOL_MODES: Record<string, "send" | "draft"> = {
   composio_create_draft: "draft",
 };
 
+/** Every tool that can wait for the user's click, and what the click means. */
+type ApprovalMode = "send" | "draft" | "apply" | "browser";
+const APPROVAL_MODES: Record<string, ApprovalMode> = {
+  ...EMAIL_TOOL_MODES,
+  browser_apply_submit: "apply",
+  browser_act: "browser",
+};
+const DECLINE_REASONS: Record<ApprovalMode, string> = {
+  send: 'The user clicked "Don\'t send".',
+  draft: 'The user clicked "Don\'t save".',
+  apply: 'The user clicked "Don\'t submit" — the application was NOT submitted.',
+  browser: "The user declined this browser action.",
+};
+
 const SUGGESTIONS = [
   "Find remote backend engineer jobs posted in the last week.",
   "I applied to a backend role at Stripe last week — find the recruiter and draft a follow-up.",
@@ -144,11 +167,14 @@ const messageText = (message: UIMessage) =>
     .join("\n\n")
     .trim();
 
-/** True when the message already sent (or drafted) an email — not safe to redo. */
+/** True when the message sent an email, saved a draft, submitted an application or did an approved browser action — not safe to redo. */
 const touchedMailbox = (message: UIMessage) =>
   message.parts.some((part) => {
-    if (!isToolUIPart(part) || !EMAIL_TOOL_MODES[getToolName(part)]) return false;
-    if (part.state !== "output-available") return false;
+    if (!isToolUIPart(part) || part.state !== "output-available") return false;
+    const name = getToolName(part);
+    if (name === "browser_act") return Boolean(part.approval?.approved);
+    if (name === "browser_apply_submit") return parseToolOutput<ApplicationOutput>(part.output)?.status === "submitted";
+    if (!EMAIL_TOOL_MODES[name]) return false;
     const output = parseToolOutput<EmailToolOutput>(part.output);
     return Boolean(output?.sent || output?.drafted);
   });
@@ -176,6 +202,7 @@ export default function Page() {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [contactsOpen, setContactsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [applicantOpen, setApplicantOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<"root" | "models">("root");
@@ -816,6 +843,9 @@ export default function Page() {
       case "knowledge":
         setKnowledgeOpen(true);
         return true;
+      case "profile":
+        setApplicantOpen(true);
+        return true;
       case "connections":
         setConnectionsOpen(true);
         return true;
@@ -875,26 +905,24 @@ export default function Page() {
     void handleSend({ text });
   };
 
-  // The email waiting for Send / Don't send, if any.
+  // The email, application or browser click waiting for the user's decision, if any.
   const pendingApproval = useMemo(() => {
     const last = messages.at(-1);
     if (!last || last.role !== "assistant") return null;
     for (const part of last.parts) {
       if (isToolUIPart(part) && part.state === "approval-requested" && !part.approval.isAutomatic) {
-        return { id: part.approval.id, mode: EMAIL_TOOL_MODES[getToolName(part)] ?? "send" };
+        return { id: part.approval.id, mode: APPROVAL_MODES[getToolName(part)] ?? "send" };
       }
     }
     return null;
   }, [messages]);
 
   const respondToApproval = useCallback(
-    (id: string, mode: "send" | "draft", approved: boolean) =>
+    (id: string, mode: ApprovalMode, approved: boolean) =>
       void addToolApprovalResponse({
         id,
         approved,
-        ...(approved
-          ? {}
-          : { reason: `The user clicked "${mode === "send" ? "Don't send" : "Don't save"}".` }),
+        ...(approved ? {} : { reason: DECLINE_REASONS[mode] }),
       }),
     [addToolApprovalResponse],
   );
@@ -951,6 +979,7 @@ export default function Page() {
     knowledgeOpen ||
     contactsOpen ||
     memoryOpen ||
+    applicantOpen ||
     shortcutsOpen ||
     paletteOpen;
 
@@ -1074,6 +1103,22 @@ export default function Page() {
       run: () => startInput("/recruiter "),
     },
     { id: "contacts", group: "Outreach", label: "Saved contacts", icon: <UsersIcon />, run: openContacts },
+    {
+      id: "apply",
+      group: "Applications",
+      label: "Apply to a job…",
+      icon: <ClipboardPenIcon />,
+      keywords: ["application", "form", "browser", "fill"],
+      run: () => startInput("/apply "),
+    },
+    {
+      id: "profile",
+      group: "Applications",
+      label: "Applicant profile & resume",
+      icon: <IdCardIcon />,
+      keywords: ["resume", "cv", "phone", "address", "sponsorship"],
+      run: () => setApplicantOpen(true),
+    },
     {
       id: "tracker",
       group: "Outreach",
@@ -1310,6 +1355,19 @@ export default function Page() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  aria-label="Applicant profile"
+                  onClick={() => setApplicantOpen(true)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <IdCardIcon className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Applicant profile &amp; resume (for job applications)</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
                   aria-label="Connections"
                   onClick={() => setConnectionsOpen(true)}
                   size="icon-sm"
@@ -1374,23 +1432,65 @@ export default function Page() {
                             return <MessageResponse key={index}>{part.text}</MessageResponse>;
                           }
                           if (!isToolUIPart(part)) return null;
-                          const emailMode = EMAIL_TOOL_MODES[getToolName(part)];
-                          if (emailMode) {
-                            // Only the latest message can still be approved; an
-                            // older unanswered request was skipped by moving on.
-                            const approvalId =
-                              part.state === "approval-requested" &&
-                              !part.approval.isAutomatic &&
-                              message.id === lastMessage?.id
-                                ? part.approval.id
-                                : null;
+                          const toolName = getToolName(part);
+                          // Only the latest message can still be approved; an
+                          // older unanswered request was skipped by moving on.
+                          const waitingApproval =
+                            part.state === "approval-requested" &&
+                            !part.approval.isAutomatic &&
+                            message.id === lastMessage?.id
+                              ? part.approval.id
+                              : null;
+                          const answered =
+                            part.state === "approval-responded" ? part.approval.approved : undefined;
+                          if (toolName === "browser_apply_submit") {
+                            const submitInput = (part.input ?? {}) as { application_id?: string };
                             return (
-                              <EmailApprovalCard
-                                approved={
-                                  part.state === "approval-responded"
-                                    ? part.approval.approved
+                              <ApplicationSubmitCard
+                                applicationId={submitInput.application_id}
+                                approved={answered}
+                                errorText={part.state === "output-error" ? part.errorText : undefined}
+                                key={part.toolCallId}
+                                mac={mac}
+                                onRespond={
+                                  waitingApproval
+                                    ? (approved) => respondToApproval(waitingApproval, "apply", approved)
                                     : undefined
                                 }
+                                output={part.state === "output-available" ? part.output : undefined}
+                                state={part.state}
+                              />
+                            );
+                          }
+                          if (
+                            toolName === "browser_act" &&
+                            (part.state === "approval-requested" ||
+                              part.state === "approval-responded" ||
+                              part.state === "output-denied")
+                          ) {
+                            const actInput = (part.input ?? {}) as { id?: string; action?: string; value?: string };
+                            return (
+                              <BrowserActApprovalCard
+                                approved={answered}
+                                element={findBrowseElement(messages, actInput.id)}
+                                input={actInput}
+                                key={part.toolCallId}
+                                mac={mac}
+                                onRespond={
+                                  waitingApproval
+                                    ? (approved) => respondToApproval(waitingApproval, "browser", approved)
+                                    : undefined
+                                }
+                                state={part.state}
+                              />
+                            );
+                          }
+                          const emailMode = EMAIL_TOOL_MODES[toolName];
+                          if (emailMode) {
+                            const approvalId = waitingApproval;
+                            return (
+                              <EmailApprovalCard
+                                approved={answered}
                                 draft={(part.input ?? {}) as EmailDraft}
                                 errorText={part.state === "output-error" ? part.errorText : undefined}
                                 key={part.toolCallId}
@@ -1548,6 +1648,12 @@ export default function Page() {
         open={paletteOpen}
       />
       <ShortcutsDialog mac={mac} onOpenChange={setShortcutsOpen} open={shortcutsOpen} />
+      <ApplicantDialog
+        keys={keys}
+        onOpenChange={setApplicantOpen}
+        onSaved={(text) => notify(text)}
+        open={applicantOpen}
+      />
       <MemoryDialog
         memories={memories}
         onAdd={(content) => addMemory(content, { quiet: true })}

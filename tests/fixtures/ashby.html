@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Application (Ashby-style)</title>
+<style>._option_{padding:4px 12px} ._option_._active_{background:#333;color:#fff}</style></head>
+<body><div id="root"></div>
+<script>
+var state = { visa: null };
+function render() {
+  document.getElementById("root").innerHTML =
+    '<div class="_fieldEntry_"><label class="_heading_" for="_systemfield_name">Name<span>*</span></label><input id="_systemfield_name" name="_systemfield_name" required></div>' +
+    '<div class="_fieldEntry_"><label class="_heading_" for="_systemfield_email">Email<span>*</span></label><input id="_systemfield_email" type="email" required></div>' +
+    '<div class="_fieldEntry_"><label class="_heading_" for="_systemfield_resume">Resume<span>*</span></label><input id="_systemfield_resume" type="file" required></div>' +
+    '<div class="_fieldEntry_"><div class="_heading_">Do you require visa sponsorship?<span>*</span></div><div class="_yesno_">' +
+      '<button type="button" class="_option_' + (state.visa === true ? ' _active_' : '') + '" data-v="yes">Yes</button>' +
+      '<button type="button" class="_option_' + (state.visa === false ? ' _active_' : '') + '" data-v="no">No</button></div></div>' +
+    (state.visa ? '<div class="_fieldEntry_"><label class="_heading_" for="visa_type">Which visa will you need?<span>*</span></label><input id="visa_type" required></div>' : '') +
+    '<button type="button" id="submit">Submit Application</button>';
+  // keep typed values across re-renders like a React app would
+  Object.keys(values).forEach(function (id) { var el = document.getElementById(id); if (el) el.value = values[id]; });
+  document.querySelectorAll("input:not([type=file])").forEach(function (el) { el.addEventListener("input", function () { values[el.id] = el.value; }); });
+  document.querySelectorAll("._yesno_ button").forEach(function (b) { b.addEventListener("click", function () { state.visa = b.dataset.v === "yes"; render(); }); });
+  document.getElementById("submit").addEventListener("click", function () { document.getElementById("root").innerHTML = "<h2>Thanks for applying!</h2><p>Your application was submitted.</p>"; });
+}
+var values = {};
+render();
+</script></body></html>

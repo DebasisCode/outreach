@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Workday-style Application</title>
+<style>[role=listbox]{position:absolute;background:#fff;border:1px solid #999;z-index:5}[role=option]{padding:3px}</style></head>
+<body><div id="app"></div><div id="popups"></div>
+<script>
+var data = { country: "", first: "", last: "", phone: "", sponsor: "", source: "" };
+var step = 1;
+function fmtPhone(v) { var d = v.replace(/\D/g, "").slice(-10); if (d.length < 4) return d; if (d.length < 7) return "(" + d.slice(0,3) + ") " + d.slice(3); return "(" + d.slice(0,3) + ") " + d.slice(3,6) + "-" + d.slice(6); }
+function field(id, label, html) { return '<div data-automation-id="formField-' + id + '"><label for="' + id + '">' + label + '<abbr title="required">*</abbr></label><div>' + html + '</div></div>'; }
+function render() {
+  var app = document.getElementById("app");
+  if (step === 1) {
+    app.innerHTML = '<h2 data-automation-id="pageHeader">My Information</h2>' +
+      field("input-1", "Country", '<button type="button" id="input-1" aria-haspopup="listbox" aria-required="true">' + (data.country || "Select One") + '</button>') +
+      field("input-2", "First Name", '<input id="input-2" aria-required="true" value="' + data.first + '">') +
+      field("input-3", "Last Name", '<input id="input-3" aria-required="true" value="' + data.last + '">') +
+      field("input-4", "Phone Number", '<input id="input-4" type="text" aria-required="true" value="' + data.phone + '">') +
+      '<div role="alert" id="err"></div><button type="button" data-automation-id="bottom-navigation-next-button">Save and Continue</button>';
+    document.getElementById("input-1").onclick = function (e) { openList(e.target, ["Canada", "India", "United States of America", "United States Minor Outlying Islands"], function (v) { data.country = v; e.target.textContent = v; }); };
+    document.getElementById("input-2").oninput = function (e) { data.first = e.target.value; };
+    document.getElementById("input-3").oninput = function (e) { data.last = e.target.value; };
+    document.getElementById("input-4").oninput = function (e) { var f = fmtPhone(e.target.value); e.target.value = f; data.phone = f; };
+    app.querySelector("[data-automation-id=bottom-navigation-next-button]").onclick = function () {
+      if (!data.country || !data.first || !data.last || data.phone.replace(/\D/g, "").length < 10) { document.getElementById("err").textContent = "Errors found: complete required fields"; return; }
+      step = 2; render();
+    };
+  } else if (step === 2) {
+    app.innerHTML = '<h2>Application Questions</h2>' +
+      '<fieldset><legend>Will you now or in the future require sponsorship for employment visa status?<abbr>*</abbr></legend>' +
+      '<input type="radio" id="s-yes" name="sponsor" value="Yes" aria-required="true"><label for="s-yes">Yes</label>' +
+      '<input type="radio" id="s-no" name="sponsor" value="No"><label for="s-no">No</label></fieldset>' +
+      field("input-9", "How Did You Hear About Us?", '<select id="input-9"><option value="">Select One</option><option>Company Website</option><option>LinkedIn</option><option>Referral</option></select>') +
+      '<div role="alert" id="err"></div><button type="button">Back</button><button type="button" id="next2">Next</button>';
+    document.getElementById("next2").onclick = function () {
+      var c = document.querySelector("input[name=sponsor]:checked"); if (!c) { document.getElementById("err").textContent = "Errors found"; return; }
+      data.sponsor = c.value; data.source = document.getElementById("input-9").value; step = 3; render();
+    };
+  } else if (step === 3) {
+    app.innerHTML = '<h2>Review</h2><p>Country: ' + data.country + '</p><p>Name: ' + data.first + ' ' + data.last + '</p><p>Phone: ' + data.phone + '</p><p>Sponsorship: ' + data.sponsor + '</p><button type="button" id="submit">Submit</button>';
+    document.getElementById("submit").onclick = function () { step = 4; history.pushState({}, "", "?state=submitted"); render(); };
+  } else {
+    app.innerHTML = '<h2>Application Submitted</h2><p>Congratulations, your application has been submitted.</p>';
+  }
+}
+function openList(anchor, options, onPick) {
+  var pop = document.getElementById("popups"); pop.innerHTML = "";
+  var lb = document.createElement("div"); lb.setAttribute("role", "listbox");
+  var r = anchor.getBoundingClientRect(); lb.style.top = (r.bottom + scrollY) + "px"; lb.style.left = r.left + "px";
+  options.forEach(function (o) { var d = document.createElement("div"); d.setAttribute("role", "option"); d.setAttribute("data-automation-id", "promptOption"); d.textContent = o; d.onclick = function () { onPick(o); pop.innerHTML = ""; }; lb.appendChild(d); });
+  pop.appendChild(lb);
+  document.addEventListener("keydown", function esc(e) { if (e.key === "Escape") { pop.innerHTML = ""; document.removeEventListener("keydown", esc); } });
+}
+render();
+</script></body></html>

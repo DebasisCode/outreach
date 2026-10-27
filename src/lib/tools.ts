@@ -24,6 +24,16 @@ import {
   SENIORITY_LEVELS,
   type EnrichOutcome,
 } from "@/lib/cleanlist";
+import { getApplicantProfile, saveApplicantProfile } from "@/lib/applicant";
+import {
+  answerApplication,
+  checkApplication,
+  nextApplicationPage,
+  startApplication,
+  submitApplication,
+} from "@/lib/applications";
+import { actNeedsApproval, browseAct, browseOpen, type BrowseAction } from "@/lib/browser/browse";
+import { browserEnabled, errorText, withBrowser } from "@/lib/browser/session";
 import { createDraft, searchJobs, sendEmail, type JobPosting } from "@/lib/composio";
 import { getEmbedClient } from "@/lib/embeddings";
 import {
@@ -34,6 +44,8 @@ import {
   trackerReport,
 } from "@/lib/tracker";
 import type {
+  ApplicationOutput,
+  BrowseOutput,
   ContactsLookupOutput,
   EmailToolOutput,
   EnrichOutput,
@@ -45,7 +57,7 @@ import type {
   TrackerFields,
 } from "@/lib/tool-outputs";
 import { jsonSchema, type ToolSet } from "ai";
-import { JOB_STATUSES, type UserKeys } from "@/lib/types";
+import { APPLICANT_PROFILE_FIELDS, JOB_STATUSES, type UserKeys } from "@/lib/types";
 
 /**
  * The tools the model can call, built per request from the user's own keys:
@@ -59,6 +71,12 @@ import { JOB_STATUSES, type UserKeys } from "@/lib/types";
  *  - tracker_save_job            save a job / its status to the tracker
  *  - memory_save / memory_forget facts about the user, always in context
  *  - knowledge_search / contacts_lookup / save_contact   local memory
+ *  - browser_apply_*             fill job applications in a real browser
+ *                                window (applications.ts); submit waits for
+ *                                the user's click, like sending email
+ *  - applicant_profile_save      what application forms ask about the user
+ *  - browser_open / browser_act  general browsing; risky clicks wait for
+ *                                the user's click
  *
  * Found contacts, saved jobs and sent emails are also copied to the user's
  * Google Sheet tracker when Google Sheets is connected (tracker.ts).
@@ -66,8 +84,26 @@ import { JOB_STATUSES, type UserKeys } from "@/lib/types";
 
 export const SEND_EMAIL_TOOL = "composio_send_email";
 export const CREATE_DRAFT_TOOL = "composio_create_draft";
-/** Tools that touch the user's mailbox — each waits for the user's click. */
-export const APPROVAL_TOOLS = [SEND_EMAIL_TOOL, CREATE_DRAFT_TOOL] as const;
+export const SUBMIT_APPLICATION_TOOL = "browser_apply_submit";
+export const BROWSER_ACT_TOOL = "browser_act";
+/** Tools that always wait for the user's click: the mailbox, and submitting an application. */
+export const APPROVAL_TOOLS = [SEND_EMAIL_TOOL, CREATE_DRAFT_TOOL, SUBMIT_APPLICATION_TOOL] as const;
+export { browserEnabled };
+
+/**
+ * Which tool calls wait for the user's click in the chat: the mailbox tools
+ * and submitting an application always; browser_act only when it would
+ * submit, send, buy or delete something.
+ */
+export function toolApprovals(tools: ToolSet) {
+  const approvals: Record<string, "user-approval" | ((input: unknown) => "user-approval" | "not-applicable")> = {};
+  for (const name of APPROVAL_TOOLS) if (tools[name]) approvals[name] = "user-approval";
+  if (tools[BROWSER_ACT_TOOL]) {
+    approvals[BROWSER_ACT_TOOL] = (input) =>
+      actNeedsApproval((input ?? {}) as { id?: string; action?: string; value?: string }) ? "user-approval" : "not-applicable";
+  }
+  return approvals;
+}
 
 const LEAD_LIST_NAME = "Job Outreach Assistant";
 const EMAIL_PATTERN = /^[^\s@<>(),;]+@[^\s@<>(),;]+\.[^\s@<>(),;]+$/;
@@ -310,6 +346,90 @@ const MemoryForgetSchema = jsonSchema<{ id: string }>({
   required: ["id"],
 });
 
+
+const ApplyStartSchema = jsonSchema<{ url: string; job_title?: string; company?: string; restart?: boolean }>({
+  type: "object",
+  properties: {
+    url: {
+      type: "string",
+      description: "The job posting or application link (prefer a job's apply_url: the company's careers page or ATS — Greenhouse, Lever, Ashby, Workday…)",
+    },
+    job_title: { type: "string" },
+    company: { type: "string" },
+    restart: {
+      type: "boolean",
+      description: "Start over even if this job was already applied to or started. Only when the user asks.",
+    },
+  },
+  required: ["url"],
+});
+
+const ApplyFillSchema = jsonSchema<{ application_id: string; answers: Array<{ field_id: string; value: string }> }>({
+  type: "object",
+  properties: {
+    application_id: { type: "string" },
+    answers: {
+      type: "array",
+      description: "Answers for fields from `needs` (by id).",
+      items: {
+        type: "object",
+        properties: {
+          field_id: { type: "string", description: "The field's id, e.g. 'f3a9c1e'" },
+          value: {
+            type: "string",
+            description:
+              "Text for text fields; one of the listed options (exact text) for choices; several options separated by ';' for multi-choice; 'yes' / 'no' for a single checkbox; 'resume' for a resume upload.",
+          },
+        },
+        required: ["field_id", "value"],
+      },
+    },
+  },
+  required: ["application_id", "answers"],
+});
+
+const ApplicationIdSchema = jsonSchema<{ application_id: string }>({
+  type: "object",
+  properties: { application_id: { type: "string" } },
+  required: ["application_id"],
+});
+
+const PROFILE_FIELD_HINTS: Record<string, string> = {
+  phone: "With country code, e.g. +91 98765 43210",
+  needsSponsorship: "'yes' or 'no'",
+  willingToRelocate: "'yes' or 'no'",
+  workAuthorization: "e.g. 'Indian citizen; needs H-1B sponsorship for the US'",
+  gender: "Only if the user wants to self-identify; empty means 'decline'",
+  ethnicity: "Only if the user wants to self-identify; empty means 'decline'",
+  veteranStatus: "Only if the user wants to self-identify; empty means 'decline'",
+  disabilityStatus: "Only if the user wants to self-identify; empty means 'decline'",
+  notes: "Other facts forms ask: degree, school, graduation year, how they hear about jobs…",
+};
+
+const ProfileSaveSchema = jsonSchema<Record<string, string>>({
+  type: "object",
+  properties: Object.fromEntries(
+    APPLICANT_PROFILE_FIELDS.map((key) => [key, PROFILE_FIELD_HINTS[key] ? { type: "string", description: PROFILE_FIELD_HINTS[key] } : { type: "string" }]),
+  ),
+});
+
+const BrowserOpenSchema = jsonSchema<{ url?: string }>({
+  type: "object",
+  properties: {
+    url: { type: "string", description: "Page to open. Leave out to read the current tab again (fresh element ids)." },
+  },
+});
+
+const BrowserActSchema = jsonSchema<{ id: string; action: BrowseAction; value?: string }>({
+  type: "object",
+  properties: {
+    id: { type: "string", description: "Element id from the latest browser_open / browser_act result, e.g. 'e12'" },
+    action: { type: "string", enum: ["click", "fill", "press"] },
+    value: { type: "string", description: "fill: the text or option · press: a key like 'Enter'" },
+  },
+  required: ["id", "action"],
+});
+
 /** "applied" -> "Applied"; anything else -> null. */
 function jobStatus(value: string | undefined): string | null {
   const wanted = value?.trim().toLowerCase();
@@ -328,6 +448,7 @@ function describeJob(job: JobPosting): JobResult {
     type: job.employmentType,
     posted_by: job.postedBy,
     url: job.url,
+    apply_url: job.applyUrl && job.applyUrl !== job.url ? job.applyUrl : null,
     summary: job.summary,
   });
 }
@@ -818,6 +939,111 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
         } catch (err) {
           const failed: EmailToolOutput = { drafted: false, error: errorMessage(err) };
           return JSON.stringify(failed);
+        }
+      },
+    };
+  }
+
+  if (browserEnabled()) {
+    enabled.push(
+      "browser_apply_start",
+      "browser_apply_fill",
+      "browser_apply_next",
+      "browser_apply_check",
+      SUBMIT_APPLICATION_TOOL,
+      "applicant_profile_save",
+      "browser_open",
+      BROWSER_ACT_TOOL,
+    );
+    const asJson = (output: ApplicationOutput | BrowseOutput) => JSON.stringify(compact(output as Record<string, unknown>));
+
+    tools.browser_apply_start = {
+      description:
+        "Open a job's application form in the user's browser window and fill everything the Applicant profile covers (name, contact, links, location, resume, voluntary self-ID → decline). Returns the questions still open (`needs`, with field ids and options) and what to do next. Never submits.",
+      inputSchema: ApplyStartSchema,
+      execute: async (input) => {
+        const url = input.url.trim();
+        const title = input.job_title?.trim() || null;
+        const company = input.company?.trim() || null;
+        // Track the job too: from the search results when we have them.
+        let jobId: string | null = null;
+        try {
+          const posting = recentPosting(url);
+          if (posting || (title && company)) {
+            jobId = saveJob(posting ?? { title: title as string, company, url, source: "Manual" }).job.id;
+          }
+        } catch (err) {
+          console.error("Couldn't save the job for this application:", err);
+        }
+        return asJson(await startApplication({ url, title, company, jobId, restart: input.restart }));
+      },
+    };
+
+    tools.browser_apply_fill = {
+      description:
+        "Fill answers into an open application (field ids from `needs`). Checks every answer took, then looks again for follow-up questions.",
+      inputSchema: ApplyFillSchema,
+      execute: async (input) => asJson(await answerApplication(input.application_id, input.answers ?? [])),
+    };
+
+    tools.browser_apply_next = {
+      description: "Multi-page applications (Workday…): go to the next page once this one is complete, and fill it.",
+      inputSchema: ApplicationIdSchema,
+      execute: async (input) => asJson(await nextApplicationPage(input.application_id)),
+    };
+
+    tools.browser_apply_check = {
+      description:
+        "Look at the application again after the user did something in the browser window (signed in, solved a CAPTCHA, edited or submitted it themselves).",
+      inputSchema: ApplicationIdSchema,
+      execute: async (input) => asJson(await checkApplication(input.application_id)),
+    };
+
+    tools[SUBMIT_APPLICATION_TOOL] = {
+      description:
+        "Submit a completed application. The app shows the user the filled form with Submit / Don't submit buttons; it's submitted only if they click Submit. Call when status is ready_to_submit.",
+      inputSchema: ApplicationIdSchema,
+      execute: async (input) => {
+        const output = await submitApplication(input.application_id);
+        if (output.status === "submitted") Object.assign(output, await logToTracker(6000));
+        return asJson(output);
+      },
+    };
+
+    tools.applicant_profile_save = {
+      description:
+        "Save facts application forms ask (contact details, location, links, work authorization, sponsorship, notice period, salary expectation…) to the user's Applicant profile, when the user tells you them. Only the fields given change.",
+      inputSchema: ProfileSaveSchema,
+      execute: async (input) => {
+        const before = getApplicantProfile();
+        const after = saveApplicantProfile(input ?? {});
+        const changed = APPLICANT_PROFILE_FIELDS.filter((key) => before[key] !== after[key]);
+        return JSON.stringify(changed.length ? { saved: changed } : { saved: [], note: "Nothing changed." });
+      },
+    };
+
+    tools.browser_open = {
+      description:
+        "Open a web page in the user's browser window and read it: page text plus numbered elements (links, buttons, fields) to use with browser_act. Without url: read the current tab (also the application tab) again.",
+      inputSchema: BrowserOpenSchema,
+      execute: async (input) => {
+        try {
+          return asJson(await withBrowser(() => browseOpen(input.url?.trim() || undefined)));
+        } catch (err) {
+          return asJson({ error: errorText(err) });
+        }
+      },
+    };
+
+    tools[BROWSER_ACT_TOOL] = {
+      description:
+        "Click, fill or press a key on an element from the latest browser_open result. Clicks that submit, send, buy or delete something wait for the user's approval. Don't use it to submit job applications — use browser_apply_submit.",
+      inputSchema: BrowserActSchema,
+      execute: async (input) => {
+        try {
+          return asJson(await withBrowser(() => browseAct(input)));
+        } catch (err) {
+          return asJson({ error: errorText(err) });
         }
       },
     };
