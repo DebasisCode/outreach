@@ -120,12 +120,12 @@ export function KnowledgeDialog({
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] grid-cols-1 overflow-y-auto overflow-x-hidden sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BrainIcon className="size-4" /> Knowledge base
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="break-words">
             Upload or paste your resume, job descriptions, and application
             notes. The assistant retrieves the right context before drafting
             every email (RAG: embeddings on Google/OpenAI, keyword search
@@ -133,7 +133,7 @@ export function KnowledgeDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-3 py-2">
+        <div className="grid grid-cols-1 gap-3 py-2">
           {/* Upload dropzone */}
           <button
             className="border-border hover:border-ring hover:bg-accent/30 flex flex-col items-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors disabled:opacity-50"
@@ -178,13 +178,14 @@ export function KnowledgeDialog({
 
           <Label className="text-xs">Title (optional)</Label>
           <input
-            className="border-input bg-background rounded-md border px-3 py-2 text-sm"
+            className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Resume — SDE 2027"
             value={title}
           />
           <Label className="text-xs">Content</Label>
           <Textarea
+            className="h-36 resize-none"
             onChange={(event) => setText(event.target.value)}
             placeholder="Paste resume text, a job description, application status notes..."
             rows={7}
@@ -209,7 +210,7 @@ export function KnowledgeDialog({
           ) : null}
 
           {items.length > 0 ? (
-            <div className="mt-2 grid gap-2">
+            <div className="mt-2 grid max-h-40 grid-cols-1 gap-2 overflow-y-auto pr-1">
               <Label className="text-xs">Stored ({items.length})</Label>
               {items.map((item) => (
                 <div
