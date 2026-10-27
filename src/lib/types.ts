@@ -106,3 +106,88 @@ export const JOB_STATUSES = [
   "Rejected",
   "Closed",
 ] as const;
+
+/**
+ * What application forms ask about the user: filled in by the user in the
+ * Applicant profile dialog (or saved by the assistant), used to fill forms.
+ * Empty strings mean "not set". EEO fields left empty are answered with the
+ * form's "decline to self-identify" option.
+ */
+export interface ApplicantProfile {
+  firstName: string;
+  lastName: string;
+  preferredName: string;
+  email: string;
+  /** With the country code, e.g. "+91 98765 43210". */
+  phone: string;
+  city: string;
+  /** State / province / region. */
+  region: string;
+  country: string;
+  postalCode: string;
+  address: string;
+  linkedinUrl: string;
+  githubUrl: string;
+  websiteUrl: string;
+  currentCompany: string;
+  currentTitle: string;
+  yearsOfExperience: string;
+  /** e.g. "Indian citizen. Need H-1B sponsorship to work in the US." */
+  workAuthorization: string;
+  /** "yes" | "no" | "" */
+  needsSponsorship: string;
+  /** "yes" | "no" | "" */
+  willingToRelocate: string;
+  noticePeriod: string;
+  salaryExpectation: string;
+  earliestStartDate: string;
+  pronouns: string;
+  gender: string;
+  ethnicity: string;
+  veteranStatus: string;
+  disabilityStatus: string;
+  /** Anything else forms tend to ask: degree, school, how you heard about jobs… */
+  notes: string;
+}
+
+export const APPLICANT_PROFILE_FIELDS = [
+  "firstName",
+  "lastName",
+  "preferredName",
+  "email",
+  "phone",
+  "city",
+  "region",
+  "country",
+  "postalCode",
+  "address",
+  "linkedinUrl",
+  "githubUrl",
+  "websiteUrl",
+  "currentCompany",
+  "currentTitle",
+  "yearsOfExperience",
+  "workAuthorization",
+  "needsSponsorship",
+  "willingToRelocate",
+  "noticePeriod",
+  "salaryExpectation",
+  "earliestStartDate",
+  "pronouns",
+  "gender",
+  "ethnicity",
+  "veteranStatus",
+  "disabilityStatus",
+  "notes",
+] as const satisfies ReadonlyArray<keyof ApplicantProfile>;
+
+export function emptyApplicantProfile(): ApplicantProfile {
+  return Object.fromEntries(APPLICANT_PROFILE_FIELDS.map((key) => [key, ""])) as unknown as ApplicantProfile;
+}
+
+/** The resume file applications upload (stored under .data/files). */
+export interface ResumeFileInfo {
+  fileName: string;
+  size: number;
+  uploadedAt: number;
+}

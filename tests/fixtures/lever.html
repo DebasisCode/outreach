@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Acme - Data Engineer (Lever-style)</title></head>
+<body>
+<div class="posting-header"><h2>Data Engineer</h2></div>
+<form method="GET" action="thanks.html" id="application-form">
+  <h4>Submit your application</h4>
+  <ul>
+    <li class="application-question resume"><div class="application-label">Resume/CV<span class="required">✱</span></div>
+      <div class="application-field"><input type="file" name="resume" id="resume-upload-input" required></div></li>
+    <li class="application-question"><div class="application-label">Full name<span class="required">✱</span></div>
+      <div class="application-field"><input type="text" name="name" required></div></li>
+    <li class="application-question"><div class="application-label">Email<span class="required">✱</span></div>
+      <div class="application-field"><input type="email" name="email" required></div></li>
+    <li class="application-question"><div class="application-label">Phone</div>
+      <div class="application-field"><input type="text" name="phone"></div></li>
+    <li class="application-question"><div class="application-label">Current company</div>
+      <div class="application-field"><input type="text" name="org"></div></li>
+    <li class="application-question"><div class="application-label">GitHub URL</div>
+      <div class="application-field"><input type="text" name="urls[GitHub]"></div></li>
+  </ul>
+  <ul>
+    <li class="application-question custom-question"><div class="application-label"><div class="text">Will you now or in the future require visa sponsorship?<span class="required">✱</span></div></div>
+      <div class="application-field"><ul data-qa="multiple-choice">
+        <li><label><input type="radio" name="cards[abc][field0]" value="Yes, I will require sponsorship" required><span class="application-answer-alternative">Yes, I will require sponsorship</span></label></li>
+        <li><label><input type="radio" name="cards[abc][field0]" value="No, I will not"><span class="application-answer-alternative">No, I will not</span></label></li>
+      </ul></div></li>
+    <li class="application-question custom-question"><div class="application-label"><div class="text">Which offices could you work from?</div></div>
+      <div class="application-field"><ul data-qa="checkboxes">
+        <li><label><input type="checkbox" name="cards[abc][field1]" value="Bangalore"><span>Bangalore</span></label></li>
+        <li><label><input type="checkbox" name="cards[abc][field1]" value="Remote"><span>Remote</span></label></li>
+        <li><label><input type="checkbox" name="cards[abc][field1]" value="London"><span>London</span></label></li>
+      </ul></div></li>
+    <li class="application-question custom-question"><div class="application-label"><div class="text">Years of professional experience<span class="required">✱</span></div></div>
+      <div class="application-field"><select name="cards[abc][field2]" required><option value="">Select...</option><option>0-2 years</option><option>3-5 years</option><option>6-10 years</option><option>10+ years</option></select></div></li>
+    <li class="application-question"><div class="application-label">Additional information</div>
+      <div class="application-field"><textarea name="comments" placeholder="Add a cover letter or anything else you want to share."></textarea></div></li>
+  </ul>
+  <button type="submit" class="template-btn-submit">Submit application</button>
+</form>
+</body></html>

@@ -34,6 +34,13 @@ function Ring({ percent }: { percent: number }) {
  * The line under the chat box: what keys do right now on the left; context,
  * memory and model on the right.
  */
+const APPROVAL_HINTS = {
+  send: ["send email", "don't send"],
+  draft: ["save draft", "don't save"],
+  apply: ["submit application", "don't submit"],
+  browser: ["allow", "don't"],
+} as const;
+
 export function StatusLine({
   mac,
   busy,
@@ -50,7 +57,7 @@ export function StatusLine({
 }: {
   mac: boolean;
   busy: boolean;
-  approval: "send" | "draft" | null;
+  approval: "send" | "draft" | "apply" | "browser" | null;
   queued: number;
   context: ContextInfo | null;
   compacting: boolean;
@@ -67,9 +74,9 @@ export function StatusLine({
   if (approval) {
     hints = (
       <span className="flex items-center gap-1.5">
-        <Kbd keys={["mod", "enter"]} mac={mac} /> {approval === "send" ? "send email" : "save draft"}
+        <Kbd keys={["mod", "enter"]} mac={mac} /> {APPROVAL_HINTS[approval][0]}
         <span className="opacity-50">·</span>
-        <Kbd keys={["esc"]} mac={mac} /> {approval === "send" ? "don't send" : "don't save"}
+        <Kbd keys={["esc"]} mac={mac} /> {APPROVAL_HINTS[approval][1]}
       </span>
     );
   } else if (busy) {

@@ -6,6 +6,8 @@ import {
   setChatSummary,
   type CompactionSummary,
 } from "@/lib/db";
+import { profileSummary } from "@/lib/applicant";
+import { browserEnabled } from "@/lib/browser/session";
 import { systemPrompt } from "@/lib/prompt";
 import type { ContextInfo } from "@/lib/tool-outputs";
 
@@ -22,7 +24,7 @@ import type { ContextInfo } from "@/lib/tool-outputs";
 /** Compact automatically once the next request would pass this. */
 export const AUTO_COMPACT_TOKENS = 40_000;
 /** Rough size of the tool definitions sent with every request. */
-const TOOL_DEFINITIONS_TOKENS = 3_000;
+const TOOL_DEFINITIONS_TOKENS = 5_000;
 /** User turns kept word for word (with full tool results). */
 const RECENT_TURNS = 2;
 const TRIM_OVER_CHARS = 1_200;
@@ -115,6 +117,31 @@ function shrinkOutput(toolName: string, text: string): string {
       );
     case "knowledge_search":
       return "(Knowledge base results from an earlier turn — search again if you need them.)";
+    case "browser_apply_start":
+    case "browser_apply_fill":
+    case "browser_apply_next":
+    case "browser_apply_check":
+    case "browser_apply_submit":
+      return (
+        pickJson(text, (data) => ({
+          application_id: data.application_id,
+          status: data.status,
+          company: data.company,
+          title: data.title,
+          filled_count: data.filled_count,
+          needs: list(data.needs).map((n) => ({ id: n.id, label: n.label })),
+          note: "(Trimmed result from an earlier turn — browser_apply_check shows the form now.)",
+        })) ?? clip(text)
+      );
+    case "browser_open":
+    case "browser_act":
+      return (
+        pickJson(text, (data) => ({
+          url: data.url,
+          title: data.title,
+          note: "(Page from an earlier turn — element ids are stale; call browser_open for fresh ones.)",
+        })) ?? clip(text)
+      );
     default:
       return clip(text);
   }
@@ -158,7 +185,11 @@ export function chatContext(chatId: string): ContextInfo {
   const messages = getMessages(chatId).map((row) => row.data as UIMessage);
   const summary = getChatSummary(chatId);
   const history = historyForModel(messages, summary);
-  const system = systemPrompt({ memories: listMemories(), summary: history.summary });
+  const system = systemPrompt({
+    memories: listMemories(),
+    summary: history.summary,
+    applicant: browserEnabled() ? profileSummary() : null,
+  });
   return {
     tokens: estimateRequestTokens(system, history.messages),
     limit: AUTO_COMPACT_TOKENS,

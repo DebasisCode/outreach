@@ -416,6 +416,8 @@ export interface JobPosting {
   /** "Direct Hire" / "Recruiter" (Dice) or "via LinkedIn" (Google Jobs). */
   postedBy: string | null;
   url: string | null;
+  /** The employer's own application link (an ATS or careers page), not a job board. */
+  applyUrl: string | null;
   /** Company website guessed from a non-job-board apply link. */
   companyDomain: string | null;
   summary: string | null;
@@ -438,6 +440,22 @@ export interface JobSearchResult {
 // Hosts that are job boards / ATSs, not the employer's own site.
 const JOB_BOARD_HOST =
   /(^|\.)(linkedin|indeed|glassdoor|ziprecruiter|monster|naukri|dice|simplyhired|wellfound|angel|builtin|lever|greenhouse|ashbyhq|workable|smartrecruiters|myworkdayjobs|workday|icims|jobvite|google|bebee|jooble|careerbuilder|foundit|instahyre|cutshort|iimjobs|shine|timesjobs|hirist|adzuna|talent|jobleads|upwork)\./i;
+
+// Boards that only re-post jobs; ATS hosts (Greenhouse, Lever…) are where applying happens.
+const REPOST_BOARD_HOST =
+  /(^|\.)(linkedin|indeed|glassdoor|ziprecruiter|monster|naukri|dice|simplyhired|wellfound|angel|builtin|bebee|jooble|careerbuilder|foundit|instahyre|cutshort|iimjobs|shine|timesjobs|hirist|adzuna|jobleads|upwork|google)\./i;
+
+/** The first apply link that isn't a re-posting job board. */
+function employerApplyLink(links: string[]): string | null {
+  for (const link of links) {
+    try {
+      if (!REPOST_BOARD_HOST.test(new URL(link).hostname)) return link;
+    } catch {
+      // not a URL
+    }
+  }
+  return null;
+}
 
 function employerDomain(links: string[]): string | null {
   for (const link of links) {
@@ -471,6 +489,7 @@ function fromGoogleJobs(row: Record<string, unknown>): JobPosting {
     employmentType: str(ext.schedule_type),
     postedBy: str(row.via),
     url: links[0] ?? str(row.share_link),
+    applyUrl: employerApplyLink(links),
     companyDomain: employerDomain(links),
     summary: clip(row.description, 280),
   };
@@ -491,6 +510,7 @@ function fromDice(row: Record<string, unknown>): JobPosting {
     employmentType: str(row.employmentType),
     postedBy: str(row.employerType),
     url: url ? url.split("?")[0] : null,
+    applyUrl: null,
     companyDomain: null,
     summary: clip(row.summary, 280),
   };

@@ -25,10 +25,11 @@ import {
   saveMessage,
   touchChat,
 } from "@/lib/db";
+import { profileSummary } from "@/lib/applicant";
 import { resolveModel } from "@/lib/models";
 import { systemPrompt } from "@/lib/prompt";
 import type { ContextInfo } from "@/lib/tool-outputs";
-import { APPROVAL_TOOLS, buildTools } from "@/lib/tools";
+import { browserEnabled, buildTools, toolApprovals } from "@/lib/tools";
 import type { UserKeys } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -95,6 +96,7 @@ export async function POST(req: NextRequest) {
   const model = resolveModel(keys);
   const { tools } = buildTools(keys);
   const memories = listMemories();
+  const applicant = browserEnabled() ? profileSummary() : null;
   const stored = getMessages(chatId).map((m) => m.data as UIMessage);
 
   let summary = getChatSummary(chatId);
@@ -105,7 +107,7 @@ export async function POST(req: NextRequest) {
   }
 
   let history = historyForModel(stored, summary);
-  let system = systemPrompt({ memories, summary: history.summary });
+  let system = systemPrompt({ memories, summary: history.summary, applicant });
   let tokens = estimateRequestTokens(system, history.messages);
   let compacted = false;
   // Long chat: fold older turns into the summary before answering.
@@ -115,7 +117,7 @@ export async function POST(req: NextRequest) {
       if (result) {
         summary = result;
         history = historyForModel(stored, summary);
-        system = systemPrompt({ memories, summary: history.summary });
+        system = systemPrompt({ memories, summary: history.summary, applicant });
         tokens = estimateRequestTokens(system, history.messages);
         compacted = true;
       }
@@ -149,11 +151,11 @@ export async function POST(req: NextRequest) {
         instructions: system,
         messages: modelMessages,
         tools,
-        // Nothing touches the user's mailbox until they click in the chat.
-        toolApproval: Object.fromEntries(
-          APPROVAL_TOOLS.filter((name) => tools[name]).map((name) => [name, "user-approval"]),
-        ),
-        stopWhen: isStepCount(12),
+        // Nothing touches the user's mailbox, and no application is
+        // submitted, until they click in the chat (see toolApprovals).
+        toolApproval: toolApprovals(tools),
+        // Multi-page applications take a few more steps than email outreach.
+        stopWhen: isStepCount(20),
       });
       writer.merge(
         toUIMessageStream({ stream: result.stream, sendReasoning: true, onError: describeError }),

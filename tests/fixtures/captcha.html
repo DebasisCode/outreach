@@ -1,0 +1,6 @@
+<!doctype html><html><head><title>Apply (captcha)</title></head><body>
+<form id="f"><label for="n">Full name *</label><input id="n" required><label for="m">Email *</label><input id="m" type="email" required>
+<label for="c">Cover letter</label><textarea id="c"></textarea>
+<button type="submit">Submit application</button></form>
+<script>document.getElementById("f").onsubmit = function (e) { e.preventDefault(); var i = document.createElement("iframe"); i.src = "/recaptcha/api2/bframe?k=x"; i.title = "recaptcha challenge expires in two minutes"; i.style.width = "400px"; i.style.height = "580px"; document.body.appendChild(i); };</script>
+</body></html>

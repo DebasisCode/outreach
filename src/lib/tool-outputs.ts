@@ -58,6 +58,8 @@ export interface EnrichOutput extends TrackerFields {
 
 export interface JobResult {
   title?: string;
+  /** The employer's own application link (ATS or careers page), when known. */
+  apply_url?: string;
   company?: string;
   company_domain?: string;
   location?: string;
@@ -111,6 +113,68 @@ export interface SaveJobOutput extends TrackerFields {
   company?: string;
   status?: string;
   url?: string;
+  error?: string;
+}
+
+/** One form field in an application result. */
+export interface ApplicationFieldSummary {
+  /** Field id to pass back to browser_apply_fill. */
+  id: string;
+  label: string;
+  kind?: string;
+  required?: boolean;
+  value?: string;
+  options?: string[];
+  more_options?: number;
+  /** What the field shows now (partly filled, or a wrong value). */
+  current?: string;
+  hint?: string;
+  /** Why the last attempt to fill it failed. */
+  error?: string;
+}
+
+/** browser_apply_* tools (and GET /api/applications/[id]). */
+export interface ApplicationOutput extends TrackerFields {
+  application_id?: string;
+  /**
+   * needs_answers: required questions left · needs_user: the user must act in
+   * the browser window · next_page · ready_to_submit · submitted · failed
+   */
+  status?: string;
+  title?: string;
+  company?: string;
+  ats?: string;
+  url?: string;
+  page_title?: string;
+  filled_count?: number;
+  filled?: ApplicationFieldSummary[];
+  /** Empty fields: required ones first, then a few optional ones. */
+  needs?: ApplicationFieldSummary[];
+  more_optional?: number;
+  problems?: ApplicationFieldSummary[];
+  /** Validation messages the site shows. */
+  page_errors?: string[];
+  /** What the user has to do in the browser window. */
+  user_action?: string;
+  /** What the assistant should do next. */
+  next_step?: string;
+  confirmation?: string;
+  resume?: string;
+  note?: string;
+  error?: string;
+  /** When the screenshot was taken (for the review card). */
+  screenshot_at?: number;
+}
+
+/** browser_open / browser_act */
+export interface BrowseOutput {
+  did?: string;
+  url?: string;
+  title?: string;
+  text?: string;
+  elements?: Array<{ id: string; kind: string; label: string; value?: string; href?: string; options?: string[]; required?: boolean }>;
+  more_elements?: number;
+  blocker?: string;
   error?: string;
 }
 
