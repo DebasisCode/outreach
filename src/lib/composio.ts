@@ -306,6 +306,29 @@ export interface OutgoingEmail {
   body: string;
   cc?: string[];
   bcc?: string[];
+  /**
+   * Local file paths to attach (e.g. the resume under .data/files). Files are
+   * staged through Composio's own storage at send time — no bucket needed.
+   */
+  attachments?: string[];
+}
+
+/**
+ * Upload local files to Composio so mail tools can attach them; returns the
+ * { name, mimetype, s3key } descriptor(s) the tool's `attachment` arg takes.
+ */
+async function stageAttachments(
+  apiKey: string,
+  toolSlug: string,
+  toolkitSlug: string,
+  paths: string[],
+): Promise<unknown> {
+  const composio = getComposio(apiKey);
+  const uploaded = await Promise.all(
+    paths.map((file) => composio.files.upload({ file, toolSlug, toolkitSlug })),
+  );
+  // The tools accept "a single file or a list of files".
+  return uploaded.length === 1 ? uploaded[0] : uploaded;
 }
 
 async function requireMailbox(apiKey: string, userId: string): Promise<ConnectionInfo> {
@@ -328,6 +351,10 @@ export async function sendEmail(
   const base = { userId, connectedAccountId: mailbox.id };
   const cc = email.cc?.filter(Boolean) ?? [];
   const bcc = email.bcc?.filter(Boolean) ?? [];
+  const toolSlug = mailbox.toolkitSlug === "outlook" ? "OUTLOOK_SEND_EMAIL" : "GMAIL_SEND_EMAIL";
+  const attachment = email.attachments?.length
+    ? await stageAttachments(apiKey, toolSlug, mailbox.toolkitSlug, email.attachments)
+    : undefined;
   const data =
     mailbox.toolkitSlug === "outlook"
       ? await runAction(apiKey, "OUTLOOK_SEND_EMAIL", "outlook", {
@@ -340,6 +367,7 @@ export async function sendEmail(
             save_to_sent_items: true,
             ...(cc.length ? { cc_emails: cc } : {}),
             ...(bcc.length ? { bcc_emails: bcc } : {}),
+            ...(attachment ? { attachment } : {}),
           },
         })
       : await runAction(apiKey, "GMAIL_SEND_EMAIL", "gmail", {
@@ -352,6 +380,7 @@ export async function sendEmail(
             user_id: "me",
             ...(cc.length ? { cc } : {}),
             ...(bcc.length ? { bcc } : {}),
+            ...(attachment ? { attachment } : {}),
           },
         });
   return {
@@ -371,6 +400,10 @@ export async function createDraft(
   const base = { userId, connectedAccountId: mailbox.id };
   const cc = email.cc?.filter(Boolean) ?? [];
   const bcc = email.bcc?.filter(Boolean) ?? [];
+  const toolSlug = mailbox.toolkitSlug === "outlook" ? "OUTLOOK_CREATE_DRAFT" : "GMAIL_CREATE_EMAIL_DRAFT";
+  const attachment = email.attachments?.length
+    ? await stageAttachments(apiKey, toolSlug, mailbox.toolkitSlug, email.attachments)
+    : undefined;
   const data =
     mailbox.toolkitSlug === "outlook"
       ? await runAction(apiKey, "OUTLOOK_CREATE_DRAFT", "outlook", {
@@ -382,6 +415,7 @@ export async function createDraft(
             to_recipients: [email.to],
             ...(cc.length ? { cc_recipients: cc } : {}),
             ...(bcc.length ? { bcc_recipients: bcc } : {}),
+            ...(attachment ? { attachment } : {}),
           },
         })
       : await runAction(apiKey, "GMAIL_CREATE_EMAIL_DRAFT", "gmail", {
@@ -394,6 +428,7 @@ export async function createDraft(
             user_id: "me",
             ...(cc.length ? { cc } : {}),
             ...(bcc.length ? { bcc } : {}),
+            ...(attachment ? { attachment } : {}),
           },
         });
   return {

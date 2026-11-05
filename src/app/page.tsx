@@ -25,6 +25,7 @@ import { Composer } from "@/components/composer";
 import { ConnectionsDialog, type Connection } from "@/components/connections-dialog";
 import { ContactsDialog } from "@/components/contacts-dialog";
 import { EmailApprovalCard, type EmailDraft } from "@/components/email-approval-card";
+import { ImagePreview } from "@/components/image-preview";
 import { Kbd } from "@/components/kbd";
 import { KnowledgeDialog } from "@/components/knowledge-dialog";
 import { MemoryDialog } from "@/components/memory-dialog";
@@ -62,6 +63,7 @@ import {
   getToolName,
   isToolUIPart,
   lastAssistantMessageIsCompleteWithApprovalResponses,
+  type FileUIPart,
   type UIMessage,
 } from "ai";
 import {
@@ -74,6 +76,7 @@ import {
   CopyIcon,
   DownloadIcon,
   FileSpreadsheetIcon,
+  FileTextIcon,
   ClipboardPenIcon,
   HashIcon,
   IdCardIcon,
@@ -116,6 +119,19 @@ interface ContactItem {
   linkedinUrl: string | null;
   source?: string;
   lastEmailedAt?: number | null;
+}
+
+/** One message waiting to be sent once the assistant is free. */
+interface QueuedMessage {
+  text: string;
+  /** Images attached in the composer (sent along with the message). */
+  files?: FileUIPart[];
+}
+
+/** A message the user is about to send: text plus any attached images. */
+interface OutgoingMessage {
+  text: string;
+  files?: FileUIPart[];
 }
 
 /** Mailbox tools: shown as the email itself, with buttons to approve. */
@@ -166,6 +182,12 @@ const messageText = (message: UIMessage) =>
     .map((part) => part.text)
     .join("\n\n")
     .trim();
+
+/** A dropped/pasted attachment (blob or data URL) back into a File, for uploads. */
+const partToFile = async (part: FileUIPart): Promise<File> => {
+  const blob = await (await fetch(part.url)).blob();
+  return new File([blob], part.filename ?? "attachment", { type: part.mediaType || blob.type });
+};
 
 /** True when the message sent an email, saved a draft, submitted an application or did an approved browser action — not safe to redo. */
 const touchedMailbox = (message: UIMessage) =>
@@ -226,11 +248,13 @@ export default function Page() {
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
   const [compacting, setCompacting] = useState(false);
   // Messages typed while the assistant is working; sent one by one after.
-  const [queue, setQueue] = useState<string[]>([]);
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [promptHistory, setPromptHistory] = useState<string[]>(readPromptHistory);
   const [ollamaModels, setOllamaModels] = useState<string[] | null>(null);
   const [input, setInput] = useState("");
+  // Resume on file (Applicant profile) — emails can attach it before send.
+  const [resumeName, setResumeName] = useState<string | null>(null);
 
   const lastAutoSyncRef = useRef(0);
   const previousStatusRef = useRef<string>("ready");
@@ -239,7 +263,7 @@ export default function Page() {
   // The next send replaces messages after an edited one (Edit).
   const rewindRef = useRef(false);
   // First message of a just-created chat, sent once its Chat instance exists.
-  const pendingSendRef = useRef<{ chatId: string; text: string } | null>(null);
+  const pendingSendRef = useRef<{ chatId: string; text: string; files?: FileUIPart[] } | null>(null);
   const justCreatedIdRef = useRef<string | null>(null);
 
   const transport = useMemo(
@@ -376,31 +400,35 @@ export default function Page() {
    * from the old "new" instance) renders the first thread into a dead chat.
    */
   const handleSend = useCallback(
-    async ({ text }: { text: string }) => {
-      if (!text.trim() || busy) return;
+    async ({ text, files }: OutgoingMessage) => {
+      if ((!text.trim() && !files?.length) || busy) return;
       if (!configured) {
         setSettingsOpenState(true);
         return;
       }
+      const payload = files?.length
+        ? text.trim()
+          ? { text, files }
+          : { files }
+        : { text };
       if (activeChatId) {
         const rewind = rewindRef.current;
         rewindRef.current = false;
-        await sendMessage(
-          { text },
-          { body: { chatId: activeChatId, ...(rewind ? { rewind: true } : {}) } },
-        );
+        await sendMessage(payload, {
+          body: { chatId: activeChatId, ...(rewind ? { rewind: true } : {}) },
+        });
         return;
       }
       const res = await fetch("/api/chats", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: text.trim().slice(0, 60) }),
+        body: JSON.stringify({ title: text.trim().slice(0, 60) || "New chat" }),
       });
       const data = (await res.json()) as { chat?: { id: string } };
       const chatId = data.chat?.id ?? null;
       if (!chatId) return;
       justCreatedIdRef.current = chatId;
-      pendingSendRef.current = { chatId, text };
+      pendingSendRef.current = { chatId, text, files };
       setActiveChatId(chatId);
       void refreshChats();
     },
@@ -416,7 +444,12 @@ export default function Page() {
     if (!pending || pending.chatId !== activeChatId) return;
     pendingSendRef.current = null;
     justCreatedIdRef.current = null;
-    void sendMessage({ text: pending.text }, { body: { chatId: pending.chatId } });
+    const payload = pending.files?.length
+      ? pending.text.trim()
+        ? { text: pending.text, files: pending.files }
+        : { files: pending.files }
+      : { text: pending.text };
+    void sendMessage(payload, { body: { chatId: pending.chatId } });
   }, [activeChatId, sendMessage]);
 
   // Initial load — deferred via setTimeout so the fetches don't synchronously
@@ -646,6 +679,15 @@ export default function Page() {
     }, 0);
     return () => clearTimeout(timer);
   }, []);
+
+  // Keep the resume name fresh: on load and after the Applicant dialog closes.
+  useEffect(() => {
+    if (applicantOpen) return;
+    fetch("/api/applicant")
+      .then((res) => res.json() as Promise<{ resume?: { fileName?: string } | null }>)
+      .then((data) => setResumeName(data.resume?.fileName ?? null))
+      .catch(() => {});
+  }, [applicantOpen]);
 
   // Contacts are refreshed right before opening their dialog.
   const openContacts = useCallback(() => {
@@ -878,15 +920,21 @@ export default function Page() {
     }
   };
 
-  const submitComposer = (raw: string) => {
+  /**
+   * Files dropped/pasted into the box: documents (PDF, DOCX, text…) are read
+   * into the knowledge base first, so the assistant can use them via
+   * knowledge_search; images ride along with the message for the model to
+   * see. Slash commands and # memory stay text-only.
+   */
+  const submitComposer = async (raw: string, files: FileUIPart[] = []) => {
     const text = raw.trim();
-    if (!text) return;
-    if (text.startsWith("/")) {
+    if (!text && files.length === 0) return;
+    if (files.length === 0 && text.startsWith("/")) {
       if (runCommand(text)) setInput("");
       return;
     }
     // "# fact" saves to memory, like Claude Code's # shortcut.
-    if (/^#\s*\S/.test(text)) {
+    if (files.length === 0 && /^#\s*\S/.test(text)) {
       rememberPrompt(text);
       setInput("");
       void addMemory(text.replace(/^#+\s*/, ""));
@@ -896,13 +944,48 @@ export default function Page() {
       setSettingsOpenState(true);
       return;
     }
-    rememberPrompt(text);
+
+    const images = files.filter((part) => part.mediaType?.startsWith("image/"));
+    const docs = files.filter((part) => !part.mediaType?.startsWith("image/"));
+    let finalText = text;
+    if (docs.length > 0 && keys) {
+      const saved: string[] = [];
+      for (const part of docs) {
+        const name = part.filename ?? "file";
+        try {
+          notify(`Reading ${name} into the knowledge base…`);
+          const form = new FormData();
+          form.append("keys", JSON.stringify(keys));
+          form.append("file", await partToFile(part));
+          const res = await fetch("/api/knowledge/upload", { method: "POST", body: form });
+          const data = (await res.json()) as { stored?: number; error?: string };
+          if (!res.ok) throw new Error(data.error ?? "Upload failed");
+          saved.push(name);
+        } catch (err) {
+          notify(`Couldn't read ${name}: ${err instanceof Error ? err.message : "unknown error"}`, {
+            tone: "error",
+          });
+        }
+      }
+      if (saved.length > 0) {
+        finalText = `${finalText ? `${finalText}\n\n` : ""}[Attached ${
+          saved.length > 1 ? "files" : "file"
+        } saved to the knowledge base: ${saved.join(", ")} — read with knowledge_search]`;
+        void refreshKnowledge();
+      }
+    }
+
+    if (text) rememberPrompt(text);
     setInput("");
+    const outgoing: OutgoingMessage = {
+      text: finalText,
+      files: images.length > 0 ? images : undefined,
+    };
     if (busy) {
-      setQueue((prev) => [...prev, text]);
+      setQueue((prev) => [...prev, outgoing]);
       return;
     }
-    void handleSend({ text });
+    void handleSend(outgoing);
   };
 
   // The email, application or browser click waiting for the user's decision, if any.
@@ -917,14 +1000,53 @@ export default function Page() {
     return null;
   }, [messages]);
 
+  /**
+   * Edits in the review card are written straight into the tool input the
+   * server executes — so the email sent (by click or Ctrl+Enter) is exactly
+   * what the user saw and tweaked.
+   */
+  const updateApprovalInput = useCallback(
+    (id: string, input: unknown) => {
+      setMessages((current) =>
+        current.map((message) => ({
+          ...message,
+          parts: message.parts.map((part) =>
+            isToolUIPart(part) && part.state === "approval-requested" && part.approval.id === id
+              ? ({ ...part, input } as typeof part)
+              : part,
+          ),
+        })),
+      );
+    },
+    [setMessages],
+  );
+
   const respondToApproval = useCallback(
-    (id: string, mode: ApprovalMode, approved: boolean) =>
+    (id: string, mode: ApprovalMode, approved: boolean, overrides?: EmailDraft) => {
+      if (approved && overrides) {
+        // Merge the card's fields into the tool input (job_title and friends
+        // stay) before the approval is recorded.
+        setMessages((current) =>
+          current.map((message) => ({
+            ...message,
+            parts: message.parts.map((part) =>
+              isToolUIPart(part) && part.state === "approval-requested" && part.approval.id === id
+                ? ({
+                    ...part,
+                    input: { ...((part.input ?? {}) as Record<string, unknown>), ...overrides },
+                  } as typeof part)
+                : part,
+            ),
+          })),
+        );
+      }
       void addToolApprovalResponse({
         id,
         approved,
         ...(approved ? {} : { reason: DECLINE_REASONS[mode] }),
-      }),
-    [addToolApprovalResponse],
+      });
+    },
+    [addToolApprovalResponse, setMessages],
   );
 
   // Send queued messages once the assistant is free (not while an email waits).
@@ -933,7 +1055,7 @@ export default function Page() {
     const timer = setTimeout(() => {
       const [next, ...rest] = queue;
       setQueue(rest);
-      void handleSend({ text: next });
+      void handleSend(next);
     }, 250);
     return () => clearTimeout(timer);
   }, [status, queue, pendingApproval, handleSend]);
@@ -1431,6 +1553,25 @@ export default function Page() {
                           if (part.type === "text" && part.text.trim()) {
                             return <MessageResponse key={index}>{part.text}</MessageResponse>;
                           }
+                          if (part.type === "file") {
+                            const file = part as FileUIPart;
+                            return file.mediaType?.startsWith("image/") ? (
+                              <ImagePreview
+                                key={index}
+                                name={file.filename ?? "Attached image"}
+                                src={file.url}
+                                thumbnailClass="max-h-56 w-auto rounded-md border"
+                              />
+                            ) : (
+                              <span
+                                className="bg-muted/60 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs"
+                                key={index}
+                              >
+                                <FileTextIcon className="text-muted-foreground size-3.5" />
+                                {file.filename ?? "file"}
+                              </span>
+                            );
+                          }
                           if (!isToolUIPart(part)) return null;
                           const toolName = getToolName(part);
                           // Only the latest message can still be approved; an
@@ -1498,10 +1639,17 @@ export default function Page() {
                                 mode={emailMode}
                                 onRespond={
                                   approvalId
-                                    ? (approved) => respondToApproval(approvalId, emailMode, approved)
+                                    ? (approved, edited) =>
+                                        respondToApproval(approvalId, emailMode, approved, edited)
+                                    : undefined
+                                }
+                                onEdit={
+                                  approvalId
+                                    ? (edited) => updateApprovalInput(approvalId, edited)
                                     : undefined
                                 }
                                 output={part.state === "output-available" ? part.output : undefined}
+                                resumeName={resumeName}
                                 state={part.state}
                               />
                             );
@@ -1597,18 +1745,19 @@ export default function Page() {
             history={promptHistory}
             onChange={setInput}
             onEscape={interrupt}
+            onFileError={(message) => notify(message, { tone: "error" })}
             onShowShortcuts={() => setShortcutsOpen(true)}
             onStop={() => void stop()}
-            onSubmit={submitComposer}
+            onSubmit={(text, files) => submitComposer(text, files)}
             onUnqueue={(index) => setQueue((prev) => prev.filter((_, i) => i !== index))}
             placeholder={
               !configured
                 ? "Add your API keys to get started…"
                 : busy
                   ? "Type to queue a message — esc to interrupt"
-                  : "Ask anything — / for commands, # to remember"
+                  : "Ask anything — drop files, paste a screenshot, / commands, # remember"
             }
-            queued={queue}
+            queued={queue.map((entry) => entry.text)}
             status={status}
             textareaRef={textareaRef}
             value={input}

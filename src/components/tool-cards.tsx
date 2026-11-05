@@ -16,6 +16,7 @@ import {
   type FindJobsOutput,
   type FindPeopleOutput,
   type JobResult,
+  type KnowledgeSaveOutput,
   type MemoryToolOutput,
   type PersonResult,
   type SaveJobOutput,
@@ -772,6 +773,8 @@ function runningLabel(name: string, input: Record<string, unknown>): string {
       return "Checking saved contacts…";
     case "knowledge_search":
       return "Reading your knowledge base…";
+    case "knowledge_save":
+      return "Saving to your knowledge base…";
     case "save_contact":
       return "Saving contact…";
     case "tracker_save_job":
@@ -904,6 +907,15 @@ export function ToolResultCard({ part, ctx }: { part: AnyToolPart; ctx: CardCont
           {count
             ? `Read ${count} note${count === 1 ? "" : "s"} from your knowledge base`
             : "Nothing relevant in your knowledge base"}
+        </StatusLine>
+      );
+    }
+    case "knowledge_save": {
+      const saved = (parsed ?? {}) as KnowledgeSaveOutput;
+      return (
+        <StatusLine state="done">
+          Saved “{saved.title ?? "an untitled note"}” to your knowledge base
+          {saved.chunks ? ` (${saved.chunks} chunk${saved.chunks === 1 ? "" : "s"}, ${saved.total ?? "?"} total)` : ""}
         </StatusLine>
       );
     }

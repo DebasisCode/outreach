@@ -24,6 +24,8 @@ export const SHORTCUTS: ShortcutInfo[] = [
   { keys: ["#"], label: "Start with # to remember a fact", group: "Chat box" },
   { keys: ["↑ ↓"], label: "Previous / next prompt", group: "Chat box" },
   { keys: ["?"], label: "Shortcuts (in an empty box)", group: "Chat box" },
+  { keys: ["mod", "V"], label: "Paste a screenshot or file into the box", group: "Chat box" },
+  { keys: ["drop"], label: "Drop files onto the box — images go to the model, documents to the knowledge base", group: "Chat box" },
   { keys: ["mod", "enter"], label: "Send the email (or save the draft)", group: "Email approval" },
   { keys: ["esc"], label: "Don't send", group: "Email approval" },
 ];

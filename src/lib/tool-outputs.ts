@@ -103,7 +103,21 @@ export interface EmailToolOutput extends TrackerFields {
   from?: string;
   mailbox?: string;
   via?: string;
+  /** File name of the attached resume, when one went along. */
+  attachment?: string;
   note?: string;
+  error?: string;
+}
+
+/** knowledge_save */
+export interface KnowledgeSaveOutput {
+  saved?: boolean;
+  /** Chunks created (a long text is split). */
+  chunks?: number;
+  /** Title the chunks are filed under. */
+  title?: string;
+  /** Total chunks in the knowledge base now. */
+  total?: number;
   error?: string;
 }
 

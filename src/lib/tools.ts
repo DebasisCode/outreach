@@ -24,7 +24,7 @@ import {
   SENIORITY_LEVELS,
   type EnrichOutcome,
 } from "@/lib/cleanlist";
-import { getApplicantProfile, saveApplicantProfile } from "@/lib/applicant";
+import { getApplicantProfile, resumePath, saveApplicantProfile } from "@/lib/applicant";
 import {
   answerApplication,
   checkApplication,
@@ -36,6 +36,7 @@ import { actNeedsApproval, browseAct, browseOpen, type BrowseAction } from "@/li
 import { browserEnabled, errorText, withBrowser } from "@/lib/browser/session";
 import { createDraft, searchJobs, sendEmail, type JobPosting } from "@/lib/composio";
 import { getEmbedClient } from "@/lib/embeddings";
+import { storeKnowledge } from "@/lib/knowledge";
 import {
   jobForEmail,
   recentPosting,
@@ -52,12 +53,14 @@ import type {
   FindJobsOutput,
   FindPeopleOutput,
   JobResult,
+  KnowledgeSaveOutput,
   MemoryToolOutput,
   SaveJobOutput,
   TrackerFields,
 } from "@/lib/tool-outputs";
 import { jsonSchema, type ToolSet } from "ai";
 import { APPLICANT_PROFILE_FIELDS, JOB_STATUSES, type UserKeys } from "@/lib/types";
+import { basename } from "node:path";
 
 /**
  * The tools the model can call, built per request from the user's own keys:
@@ -70,7 +73,10 @@ import { APPLICANT_PROFILE_FIELDS, JOB_STATUSES, type UserKeys } from "@/lib/typ
  *  - composio_create_draft       save to the user's drafts instead
  *  - tracker_save_job            save a job / its status to the tracker
  *  - memory_save / memory_forget facts about the user, always in context
- *  - knowledge_search / contacts_lookup / save_contact   local memory
+ *  - knowledge_search / knowledge_save / contacts_lookup / save_contact
+ *                                local memory: look up and store notes,
+ *                                resumes, research (knowledge_save is how the
+ *                                assistant files things there itself)
  *  - browser_apply_*             fill job applications in a real browser
  *                                window (applications.ts); submit waits for
  *                                the user's click, like sending email
@@ -269,13 +275,35 @@ const CheckEnrichmentSchema = jsonSchema<{ workflow_id: string }>({
   required: ["workflow_id"],
 });
 
+const KnowledgeSaveSchema = jsonSchema<{ text: string; title?: string }>({
+  type: "object",
+  properties: {
+    text: {
+      type: "string",
+      description: "The content to keep, e.g. a job description or notes about a company",
+    },
+    title: { type: "string", description: "e.g. 'PinnacleU — what they do' or 'JD — backend intern'" },
+  },
+  required: ["text"],
+});
+
 const EMAIL_PROPERTIES = {
   to: { type: "string", description: "Recipient email address" },
   subject: { type: "string" },
   body: { type: "string", description: "Plain-text body, including the sign-off" },
+  attach_resume: {
+    type: "boolean",
+    description:
+      "Attach the resume the user uploaded in their Applicant profile. Do this for emails about a specific role. Fails cleanly when no resume is uploaded yet.",
+  },
 } as const;
 
-const DraftEmailSchema = jsonSchema<{ to: string; subject: string; body: string }>({
+const DraftEmailSchema = jsonSchema<{
+  to: string;
+  subject: string;
+  body: string;
+  attach_resume?: boolean;
+}>({
   type: "object",
   properties: EMAIL_PROPERTIES,
   required: ["to", "subject", "body"],
@@ -287,6 +315,7 @@ const SendEmailSchema = jsonSchema<{
   body: string;
   job_title?: string;
   job_url?: string;
+  attach_resume?: boolean;
 }>({
   type: "object",
   properties: {
@@ -511,10 +540,27 @@ async function reportEnrichment(
   });
 }
 
+/**
+ * The resume to attach for attach_resume=true: the file uploaded in the
+ * Applicant profile. An error string when there's nothing on file.
+ */
+function resolveEmailAttachments(attachResume?: boolean): { attachments?: string[]; error?: string } {
+  if (!attachResume) return {};
+  const resume = resumePath();
+  if (!resume) {
+    return {
+      error:
+        "No resume on file yet — the user uploads it under Applicant profile (ID-card icon). Tell them, and don't retry with attach_resume until it's uploaded.",
+    };
+  }
+  return { attachments: [resume] };
+}
+
 export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] } {
   const tools: ToolSet = {};
   const enabled: string[] = [
     "knowledge_search",
+    "knowledge_save",
     "contacts_lookup",
     "save_contact",
     "tracker_save_job",
@@ -568,6 +614,27 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
           .join("\n\n");
       } catch (err) {
         return `Knowledge search failed: ${errorMessage(err)}`;
+      }
+    },
+  };
+
+  tools.knowledge_save = {
+    description:
+      "Save text into the user's knowledge base so knowledge_search finds it in this and future chats: a job description worth keeping, notes about a company you researched, email drafts or talking points the user wants stored. One thing per call, with a clear title. Not for facts about the user (memory_save) or for files the user drops in the chat (those are saved automatically).",
+    inputSchema: KnowledgeSaveSchema,
+    execute: async (input) => {
+      try {
+        const result = await storeKnowledge(keys, input.title?.trim() || null, input.text);
+        const output: KnowledgeSaveOutput = {
+          saved: true,
+          chunks: result.stored,
+          title: input.title?.trim() || undefined,
+          total: result.total,
+        };
+        return JSON.stringify(output);
+      } catch (err) {
+        const failed: KnowledgeSaveOutput = { error: errorMessage(err) };
+        return JSON.stringify(failed);
       }
     },
   };
@@ -860,7 +927,7 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
 
     tools[SEND_EMAIL_TOOL] = {
       description:
-        "Send an email from the user's connected Gmail (or Outlook). The app shows the user this exact email with Send / Don't send buttons; it goes out only if they click Send. Pass job_title (and job_url if known) when the email is about a specific role.",
+        "Send an email from the user's connected Gmail (or Outlook). The app shows the user this exact email with Send / Don't send buttons (they can edit it first; what they see is what goes out). It goes out only if they click Send. Pass job_title (and job_url if known) when the email is about a specific role, and attach_resume=true to attach the resume from the user's Applicant profile.",
       inputSchema: SendEmailSchema,
       execute: async (input) => {
         const to = input.to.trim();
@@ -868,12 +935,18 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
           const invalid: EmailToolOutput = { sent: false, error: `"${input.to}" is not a valid email address.` };
           return JSON.stringify(invalid);
         }
+        const { attachments, error: attachmentError } = resolveEmailAttachments(input.attach_resume);
+        if (attachmentError) {
+          const failed: EmailToolOutput = { sent: false, error: attachmentError };
+          return JSON.stringify(failed);
+        }
         let sent: Awaited<ReturnType<typeof sendEmail>>;
         try {
           sent = await sendEmail(keys.composioApiKey, composioUserId, {
             to,
             subject: input.subject,
             body: input.body,
+            attachments,
           });
         } catch (err) {
           const failed: EmailToolOutput = { sent: false, error: errorMessage(err) };
@@ -906,6 +979,7 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
           to,
           from: sent.from ?? `your ${sent.toolkit}`,
           via: sent.toolkit,
+          attachment: attachments?.length ? basename(attachments[0]) : null,
           ...tracker,
         });
         return JSON.stringify(output);
@@ -914,7 +988,7 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
 
     tools[CREATE_DRAFT_TOOL] = {
       description:
-        "Save the email as a draft in the user's connected Gmail (or Outlook), only when they ask for a draft. The app shows it with Save / Don't save buttons. Nothing is sent.",
+        "Save the email as a draft in the user's connected Gmail (or Outlook), only when they ask for a draft. The app shows it with Save / Don't save buttons (editable first). Nothing is sent. attach_resume=true attaches the resume from the user's Applicant profile.",
       inputSchema: DraftEmailSchema,
       execute: async (input) => {
         const to = input.to.trim();
@@ -922,17 +996,24 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
           const invalid: EmailToolOutput = { drafted: false, error: `"${input.to}" is not a valid email address.` };
           return JSON.stringify(invalid);
         }
+        const { attachments, error: attachmentError } = resolveEmailAttachments(input.attach_resume);
+        if (attachmentError) {
+          const failed: EmailToolOutput = { drafted: false, error: attachmentError };
+          return JSON.stringify(failed);
+        }
         try {
           const draft = await createDraft(keys.composioApiKey, composioUserId, {
             to,
             subject: input.subject,
             body: input.body,
+            attachments,
           });
           const output: EmailToolOutput = compact({
             drafted: true,
             to,
             mailbox: draft.from ?? draft.toolkit,
             via: draft.toolkit,
+            attachment: attachments?.length ? basename(attachments[0]) : null,
             note: `Saved in ${draft.toolkit === "outlook" ? "Outlook" : "Gmail"} drafts — not sent.`,
           });
           return JSON.stringify(output);

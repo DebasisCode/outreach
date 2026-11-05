@@ -34,7 +34,11 @@ Everything is stored locally in `.data/outreach.db` (SQLite), keys included.
 
 - **Jobs → people → email → send.** Results show as cards with buttons: *Find
   recruiter* on a job, *Get email* on a person, *Write email* on a found email,
-  *Send / Don't send* on the email itself.
+  and the email itself opens with **Edit** (change the wording, tick
+  *Attach my resume*) before **Send / Don't send**.
+- **Attachments in chat.** Drag & drop or Ctrl+V a screenshot, PDF, DOCX or
+  text file into the chat box. Images go with the message so the model can
+  look at them; documents are read into your knowledge base automatically.
 - **Application tracker.** With Google Sheets connected, an "Outreach Tracker"
   sheet keeps Jobs (with a Status column you can edit), Contacts and Emails up
   to date automatically.
@@ -53,8 +57,10 @@ Everything is stored locally in `.data/outreach.db` (SQLite), keys included.
 - **Browsing.** Ask it to do something on a website: it opens the page in the
   same window, reads it and clicks or types. Clicks that would submit, send,
   buy or delete something wait for your OK in the chat.
-- **Knowledge base.** Upload your resume and notes; the assistant searches them
-  when writing.
+- **Knowledge base.** Upload your resume and notes (or drop files into the
+  chat); the assistant searches them when writing, and saves useful things
+  there itself — job descriptions, company research — so it doesn't have to
+  find them again.
 - **Context that stays small.** Older tool results are trimmed for the model,
   `/compact` summarizes a long chat, and it auto-compacts near the limit. The
   status line shows how full the context is.
