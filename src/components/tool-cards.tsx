@@ -1,6 +1,7 @@
 "use client";
 
 import { ApplicationCard } from "@/components/application-cards";
+import { GitHubResultCard } from "@/components/github-cards";
 import { TrackerNote } from "@/components/tracker-note";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -783,6 +784,18 @@ function runningLabel(name: string, input: Record<string, unknown>): string {
       return "Saving to memory…";
     case "memory_forget":
       return "Updating memory…";
+    case "github_list_repositories":
+      return "Listing your GitHub repositories…";
+    case "github_get_repository":
+      return "Reading the GitHub repository…";
+    case "github_list_files":
+      return "Reading the repository tree…";
+    case "github_read_file":
+      return `Reading ${text("path") || "the GitHub file"}…`;
+    case "github_list_pull_requests":
+      return "Reading GitHub pull requests…";
+    case "github_get_pull_request":
+      return "Reading the GitHub pull request…";
     case "browser_apply_start":
       return `Opening the application${text("company") ? ` at ${text("company")}` : ""} in the browser and filling it in…`;
     case "browser_apply_fill":
@@ -833,6 +846,13 @@ export function ToolResultCard({ part, ctx }: { part: AnyToolPart; ctx: CardCont
       return parsed ? <EnrichmentCard ctx={ctx} output={parsed as EnrichOutput} /> : null;
     case "find_jobs":
       return parsed ? <JobsCard ctx={ctx} output={parsed as FindJobsOutput} /> : null;
+    case "github_list_repositories":
+    case "github_get_repository":
+    case "github_list_files":
+    case "github_read_file":
+    case "github_list_pull_requests":
+    case "github_get_pull_request":
+      return <GitHubResultCard output={raw} toolName={name} />;
     case "memory_save":
       return parsed ? <MemoryLine ctx={ctx} output={parsed as MemoryToolOutput} /> : null;
     case "memory_forget": {

@@ -5,6 +5,7 @@ import { AuthScheme, Composio } from "@composio/core";
  * through them. This app uses it to:
  *  - send email and save drafts from the user's Gmail (or Outlook)
  *  - search job listings: Google Jobs via SerpAPI when connected, else Dice
+ *  - read and edit GitHub repositories, then open pull requests
  *
  * Everything is scoped to the user's Composio API key plus a user id
  * ("default" unless changed), both sent per request from the UI.
@@ -39,7 +40,18 @@ const PINNED_TOOLKIT_VERSIONS: Record<string, string> = {
   serpapi: "20261014_01",
   dice_mcp: "20261018_00",
   googlesheets: "20261018_00",
+  github: "20261103_00",
 };
+
+/**
+ * GitHub's classic OAuth scopes cannot separate contents and pull requests.
+ * `repo` is the narrowest Composio OAuth scope that covers reads, commits and
+ * PRs on both public and private repositories. It does not include workflow,
+ * organization-admin or repository-deletion scopes. Composio's scope endpoint
+ * returns 501 for several custom write actions, so this must not be resolved
+ * through recommendScopes().
+ */
+export const GITHUB_OAUTH_SCOPES = ["repo"] as const;
 
 const toolVersions = new Map<string, string>();
 
@@ -190,11 +202,59 @@ export async function describeConnection(
         args: { user_id: "me" },
       });
       label = str(dig(data, "mail")) ?? str(dig(data, "userPrincipalName"));
+    } else if (connection.toolkitSlug === "github") {
+      const data = await runAction(apiKey, "GITHUB_GET_THE_AUTHENTICATED_USER", "github", {
+        ...base,
+        args: {},
+      });
+      label = str(dig(data, "login")) ?? str(dig(data, "name"));
     }
     if (label) accountLabels.set(connection.id, { label, expiresAt: Number.POSITIVE_INFINITY });
     return label;
   } catch {
     return null;
+  }
+}
+
+function scopeList(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[\s,]+/) : [];
+  return [...new Set(values.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()))].sort();
+}
+
+/** Exact scope-set comparison: broader existing GitHub configs are never reused. */
+export function githubScopesMatch(actual: unknown, expected: string[]): boolean {
+  const left = scopeList(actual);
+  const right = scopeList(expected);
+  return left.length === right.length && left.every((scope, index) => scope === right[index]);
+}
+
+/**
+ * GitHub OAuth is intentionally handled separately from the other connections:
+ * use only the fixed scope above, and never silently reuse a broader config.
+ */
+export async function ensureGithubAuthConfig(composio: Composio): Promise<string> {
+  const scopes = [...GITHUB_OAUTH_SCOPES];
+  const { items } = await composio.authConfigs.list({ toolkit: "github" });
+  const match = (items ?? []).find(
+    (config) =>
+      config.status !== "DISABLED" &&
+      config.isComposioManaged &&
+      (!config.authScheme || config.authScheme === "OAUTH2") &&
+      githubScopesMatch(config.credentials?.scopes, scopes),
+  );
+  if (match) return match.id;
+
+  try {
+    const created = await composio.authConfigs.create("github", {
+      type: "use_composio_managed_auth",
+      name: "github (Outreach, least privilege)",
+      credentials: { scopes },
+    });
+    return created.id;
+  } catch (err) {
+    throw new ComposioActionError(
+      `Couldn't create a least-privilege GitHub connection (${err instanceof Error ? err.message : "unknown error"}). No broader GitHub authorization was used.`,
+    );
   }
 }
 
@@ -247,7 +307,10 @@ export async function createConnectLink(
   callbackUrl: string,
 ): Promise<{ connectedAccountId: string; redirectUrl: string }> {
   const composio = getComposio(apiKey);
-  const authConfigId = await ensureAuthConfig(composio, toolkitSlug, "oauth");
+  const authConfigId =
+    toolkitSlug === "github"
+      ? await ensureGithubAuthConfig(composio)
+      : await ensureAuthConfig(composio, toolkitSlug, "oauth");
   const request = await composio.connectedAccounts.link(userId, authConfigId, {
     callbackUrl,
     // Lets the user add a second mailbox; the newest active one is used.

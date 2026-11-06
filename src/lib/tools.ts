@@ -35,6 +35,7 @@ import {
 import { actNeedsApproval, browseAct, browseOpen, type BrowseAction } from "@/lib/browser/browse";
 import { browserEnabled, errorText, withBrowser } from "@/lib/browser/session";
 import { createDraft, searchJobs, sendEmail, type JobPosting } from "@/lib/composio";
+import { buildGithubTools, GITHUB_APPROVAL_TOOLS } from "@/lib/github";
 import { getEmbedClient } from "@/lib/embeddings";
 import { storeKnowledge } from "@/lib/knowledge";
 import {
@@ -71,6 +72,8 @@ import { basename } from "node:path";
  *  - composio_send_email         send from the user's Gmail/Outlook; the chat
  *                                route makes this wait for the user's click
  *  - composio_create_draft       save to the user's drafts instead
+ *  - github_*                    read repositories/files/PRs; create branches,
+ *                                commit file changes and open PRs after approval
  *  - tracker_save_job            save a job / its status to the tracker
  *  - memory_save / memory_forget facts about the user, always in context
  *  - knowledge_search / knowledge_save / contacts_lookup / save_contact
@@ -92,8 +95,13 @@ export const SEND_EMAIL_TOOL = "composio_send_email";
 export const CREATE_DRAFT_TOOL = "composio_create_draft";
 export const SUBMIT_APPLICATION_TOOL = "browser_apply_submit";
 export const BROWSER_ACT_TOOL = "browser_act";
-/** Tools that always wait for the user's click: the mailbox, and submitting an application. */
-export const APPROVAL_TOOLS = [SEND_EMAIL_TOOL, CREATE_DRAFT_TOOL, SUBMIT_APPLICATION_TOOL] as const;
+/** Tools that always wait for the user's click before changing anything external. */
+export const APPROVAL_TOOLS = [
+  SEND_EMAIL_TOOL,
+  CREATE_DRAFT_TOOL,
+  SUBMIT_APPLICATION_TOOL,
+  ...GITHUB_APPROVAL_TOOLS,
+] as const;
 export { browserEnabled };
 
 /**
@@ -895,6 +903,9 @@ export function buildTools(keys: UserKeys): { tools: ToolSet; enabled: string[] 
 
   if (keys.composioApiKey) {
     enabled.push("find_jobs", SEND_EMAIL_TOOL, CREATE_DRAFT_TOOL);
+    const github = buildGithubTools(composioKey, composioUserId);
+    Object.assign(tools, github.tools);
+    enabled.push(...github.enabled);
 
     tools.find_jobs = {
       description:

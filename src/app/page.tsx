@@ -25,6 +25,7 @@ import { Composer } from "@/components/composer";
 import { ConnectionsDialog, type Connection } from "@/components/connections-dialog";
 import { ContactsDialog } from "@/components/contacts-dialog";
 import { EmailApprovalCard, type EmailDraft } from "@/components/email-approval-card";
+import { GitHubApprovalCard } from "@/components/github-cards";
 import { ImagePreview } from "@/components/image-preview";
 import { Kbd } from "@/components/kbd";
 import { KnowledgeDialog } from "@/components/knowledge-dialog";
@@ -140,10 +141,17 @@ const EMAIL_TOOL_MODES: Record<string, "send" | "draft"> = {
   composio_create_draft: "draft",
 };
 
+const GITHUB_APPROVAL_MODES: Record<string, "github"> = {
+  github_create_branch: "github",
+  github_commit_changes: "github",
+  github_create_pull_request: "github",
+};
+
 /** Every tool that can wait for the user's click, and what the click means. */
-type ApprovalMode = "send" | "draft" | "apply" | "browser";
+type ApprovalMode = "send" | "draft" | "apply" | "browser" | "github";
 const APPROVAL_MODES: Record<string, ApprovalMode> = {
   ...EMAIL_TOOL_MODES,
+  ...GITHUB_APPROVAL_MODES,
   browser_apply_submit: "apply",
   browser_act: "browser",
 };
@@ -152,6 +160,7 @@ const DECLINE_REASONS: Record<ApprovalMode, string> = {
   draft: 'The user clicked "Don\'t save".',
   apply: 'The user clicked "Don\'t submit" — the application was NOT submitted.',
   browser: "The user declined this browser action.",
+  github: "The user declined this GitHub change. No branch, commit, or pull request was created.",
 };
 
 const SUGGESTIONS = [
@@ -194,6 +203,7 @@ const touchedMailbox = (message: UIMessage) =>
   message.parts.some((part) => {
     if (!isToolUIPart(part) || part.state !== "output-available") return false;
     const name = getToolName(part);
+    if (GITHUB_APPROVAL_MODES[name]) return true;
     if (name === "browser_act") return Boolean(part.approval?.approved);
     if (name === "browser_apply_submit") return parseToolOutput<ApplicationOutput>(part.output)?.status === "submitted";
     if (!EMAIL_TOOL_MODES[name]) return false;
@@ -994,7 +1004,7 @@ export default function Page() {
     if (!last || last.role !== "assistant") return null;
     for (const part of last.parts) {
       if (isToolUIPart(part) && part.state === "approval-requested" && !part.approval.isAutomatic) {
-        return { id: part.approval.id, mode: APPROVAL_MODES[getToolName(part)] ?? "send" };
+        return { id: part.approval.id, mode: APPROVAL_MODES[getToolName(part)] ?? "browser" };
       }
     }
     return null;
@@ -1584,6 +1594,25 @@ export default function Page() {
                               : null;
                           const answered =
                             part.state === "approval-responded" ? part.approval.approved : undefined;
+                          if (GITHUB_APPROVAL_MODES[toolName]) {
+                            return (
+                              <GitHubApprovalCard
+                                approved={answered}
+                                errorText={part.state === "output-error" ? part.errorText : undefined}
+                                input={(part.input ?? {}) as Record<string, unknown>}
+                                key={part.toolCallId}
+                                mac={mac}
+                                onRespond={
+                                  waitingApproval
+                                    ? (approved) => respondToApproval(waitingApproval, "github", approved)
+                                    : undefined
+                                }
+                                output={part.state === "output-available" ? part.output : undefined}
+                                state={part.state}
+                                toolName={toolName}
+                              />
+                            );
+                          }
                           if (toolName === "browser_apply_submit") {
                             const submitInput = (part.input ?? {}) as { application_id?: string };
                             return (

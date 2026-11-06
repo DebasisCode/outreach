@@ -235,6 +235,89 @@ export interface MemoryItem {
   updatedAt: number;
 }
 
+export interface GithubRepository {
+  name?: string;
+  full_name?: string;
+  url?: string;
+  description?: string;
+  private?: boolean;
+  default_branch?: string;
+  language?: string;
+  updated_at?: string;
+}
+
+export interface GithubRepositoriesOutput {
+  repositories?: GithubRepository[];
+  error?: string;
+}
+
+export interface GithubFileEntry {
+  name?: string;
+  path?: string;
+  type?: string;
+  size?: number;
+  sha?: string;
+  url?: string;
+}
+
+export interface GithubDirectoryOutput {
+  owner?: string;
+  repo?: string;
+  ref?: string;
+  path?: string;
+  entries?: GithubFileEntry[];
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface GithubFileOutput {
+  owner?: string;
+  repo?: string;
+  ref?: string;
+  path?: string;
+  sha?: string;
+  size?: number;
+  content?: string;
+  truncated?: boolean;
+  url?: string;
+  error?: string;
+}
+
+export interface GithubPullRequest {
+  number?: number;
+  title?: string;
+  state?: string;
+  url?: string;
+  head?: string;
+  base?: string;
+  draft?: boolean;
+  merged?: boolean;
+  updated_at?: string;
+}
+
+export interface GithubPullRequestsOutput {
+  pull_requests?: GithubPullRequest[];
+  error?: string;
+}
+
+export interface GithubMutationOutput {
+  created?: boolean;
+  committed?: boolean;
+  owner?: string;
+  repo?: string;
+  branch?: string;
+  commit_sha?: string;
+  files?: string[];
+  deleted?: string[];
+  url?: string;
+  error?: string;
+}
+
+export interface GithubPullRequestOutput extends GithubPullRequest {
+  created?: boolean;
+  error?: string;
+}
+
 /** How full the model's context is (sent with each reply as a data part). */
 export interface ContextInfo {
   /** Estimated tokens the next request sends. */

@@ -18,12 +18,12 @@ after(async () => {
 });
 
 /** Runs one model step that calls `toolName` with `input`, with the app's real tools and approval rules. */
-async function callTool(toolName: string, input: Record<string, unknown>) {
+async function callTool(toolName: string, input: Record<string, unknown>, withComposio = false) {
   const { streamText, isStepCount } = await import("ai");
   const { MockLanguageModelV4 } = await import("ai/test");
   const { simulateReadableStream } = await import("ai");
   const { buildTools, toolApprovals } = await import("@/lib/tools");
-  const keys = { llmApiKey: "x", llmProvider: "anthropic" as const, llmModel: "mock", cleanlistApiKey: "", composioApiKey: "", composioUserId: "" };
+  const keys = { llmApiKey: "x", llmProvider: "anthropic" as const, llmModel: "mock", cleanlistApiKey: "", composioApiKey: withComposio ? "test-key" : "", composioUserId: "" };
   const { tools } = buildTools(keys);
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
   const model = new MockLanguageModelV4({
@@ -46,6 +46,19 @@ test("submitting an application always waits for the user", async () => {
   const types = await callTool("browser_apply_submit", { application_id: "anything" });
   assert.ok(types.includes("tool-approval-request"), types.join(","));
   assert.ok(!types.includes("tool-result"), "must not run before approval");
+});
+
+test("GitHub branches, commits and pull requests never run before approval", async () => {
+  const cases = [
+    ["github_create_branch", { owner: "acme", repo: "site", branch: "feature" }],
+    ["github_commit_changes", { owner: "acme", repo: "site", branch: "feature", message: "Update site", files: [{ path: "README.md", content: "new" }] }],
+    ["github_create_pull_request", { owner: "acme", repo: "site", base: "main", head: "feature", title: "Update site" }],
+  ] as const;
+  for (const [toolName, input] of cases) {
+    const types = await callTool(toolName, input, true);
+    assert.ok(types.includes("tool-approval-request"), `${toolName}: ${types.join(",")}`);
+    assert.ok(!types.includes("tool-result"), `${toolName} must not run before approval`);
+  }
 });
 
 test("browser clicks wait for the user only when they would submit, send, buy or delete", async () => {

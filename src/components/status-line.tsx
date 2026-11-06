@@ -39,6 +39,7 @@ const APPROVAL_HINTS = {
   draft: ["save draft", "don't save"],
   apply: ["submit application", "don't submit"],
   browser: ["allow", "don't"],
+  github: ["approve GitHub change", "don't"],
 } as const;
 
 export function StatusLine({
@@ -57,7 +58,7 @@ export function StatusLine({
 }: {
   mac: boolean;
   busy: boolean;
-  approval: "send" | "draft" | "apply" | "browser" | null;
+  approval: "send" | "draft" | "apply" | "browser" | "github" | null;
   queued: number;
   context: ContextInfo | null;
   compacting: boolean;
