@@ -85,6 +85,13 @@ export const COMPOSIO_TOOLKITS = [
     connect: "oauth",
   },
   {
+    slug: "github",
+    label: "GitHub",
+    description:
+      "Read repositories and files, commit changes on branches, and open pull requests. Every write needs your approval; only the OAuth scopes needed by these tools are requested.",
+    connect: "oauth",
+  },
+  {
     slug: "serpapi",
     label: "SerpAPI (Google Jobs)",
     description:

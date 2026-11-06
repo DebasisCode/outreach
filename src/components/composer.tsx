@@ -6,16 +6,102 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
+import { ImagePreview } from "@/components/image-preview";
 import { matchCommands, requiresArgs, type SlashCommand } from "@/lib/commands";
-import type { ChatStatus } from "ai";
-import { ClockIcon, XIcon } from "lucide-react";
-import { useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import type { ChatStatus, FileUIPart } from "ai";
+import {
+  ClockIcon,
+  FileTextIcon,
+  PaperclipIcon,
+  XIcon,
+} from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+
+/** What the chat box takes: images go to the model; documents (PDF, DOCX, TXT…) are read into the knowledge base. */
+export const CHAT_ACCEPT =
+  "image/*,.pdf,.docx,.txt,.md,.markdown,.csv,.json,application/pdf,text/plain,text/markdown,text/csv,application/json";
+const CHAT_MAX_FILES = 6;
+const CHAT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Chips for the attached files, above the textarea. Images show a thumbnail.
+ * Lives inside <PromptInput> so it can use its attachments context.
+ */
+function AttachmentChips({ onCount }: { onCount: (count: number) => void }) {
+  const attachments = usePromptInputAttachments();
+  useEffect(() => onCount(attachments.files.length), [attachments.files.length, onCount]);
+  if (attachments.files.length === 0) return null;
+  return (
+    // w-full: the group is a centered column, chips hug left without it.
+    <div className="flex w-full flex-wrap items-center gap-1.5 px-2 pt-2">
+      {attachments.files.map((file) => {
+        const image = file.mediaType?.startsWith("image/");
+        return (
+          <span
+            className="bg-muted/70 border-border/60 flex max-w-48 items-center gap-1.5 rounded-md border py-1 pr-1 pl-1.5 text-xs"
+            key={file.id}
+          >
+            {image ? (
+              <ImagePreview
+                className="shrink-0"
+                name={file.filename ?? "image"}
+                src={file.url}
+                thumbnailClass="size-6 rounded object-cover"
+              />
+            ) : (
+              <FileTextIcon className="text-muted-foreground size-3.5 shrink-0" />
+            )}
+            <span className="min-w-0 truncate">{file.filename ?? "file"}</span>
+            <button
+              aria-label={`Remove ${file.filename ?? "attachment"}`}
+              className="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+              onClick={() => attachments.remove(file.id)}
+              type="button"
+            >
+              <XIcon className="size-3" />
+            </button>
+          </span>
+        );
+      })}
+      <p className="text-muted-foreground w-full px-1 pb-0.5 text-[10px]">
+        Images are sent with the message · documents are saved to your knowledge base
+      </p>
+    </div>
+  );
+}
+
+/** Paperclip button for the composer's tools row; opens the file picker. */
+function AttachButton() {
+  const attachments = usePromptInputAttachments();
+  return (
+    <button
+      aria-label="Attach files"
+      className="hover:bg-accent hover:text-foreground text-muted-foreground inline-flex size-7 items-center justify-center rounded-md transition-colors"
+      onClick={() => attachments.openFileDialog()}
+      title="Attach files — or drop / paste them into the box"
+      type="button"
+    >
+      <PaperclipIcon className="size-4" />
+    </button>
+  );
+}
 
 /**
  * The chat box, terminal-agent style: "/" opens the command list, ↑/↓ walk
  * through earlier prompts, Esc interrupts, and messages typed while the
- * assistant works wait in a queue.
+ * assistant works wait in a queue. Files attach by drag & drop, Ctrl+V
+ * (screenshots) or the paperclip: images go along with the message,
+ * documents land in the knowledge base.
  */
 export function Composer({
   value,
@@ -24,6 +110,7 @@ export function Composer({
   onStop,
   onEscape,
   onShowShortcuts,
+  onFileError,
   status,
   history,
   queued,
@@ -35,11 +122,13 @@ export function Composer({
   value: string;
   onChange: (value: string) => void;
   /** A message, a /command or a # memory — the page decides what to do. */
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, files: FileUIPart[]) => void;
   onStop: () => void;
   /** Esc when no menu is open: interrupt, or decline a waiting email. */
   onEscape: () => void;
   onShowShortcuts: () => void;
+  /** Bad attachment (too big, unsupported type) — surfaced as a notice. */
+  onFileError?: (message: string) => void;
   status: ChatStatus;
   /** Earlier prompts, oldest first. */
   history: string[];
@@ -56,6 +145,10 @@ export function Composer({
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
   // Position while walking through history with ↑/↓ (null = editing a draft).
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [attachmentCount, setAttachmentCount] = useState(0);
+  // Files being dragged over the box (visual cue only; PromptInput adds them).
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const draftRef = useRef("");
 
   const commandQuery = value.startsWith("/") && !/\s/.test(value) ? value.slice(1) : null;
@@ -69,10 +162,10 @@ export function Composer({
     onChange(next);
   };
 
-  const submit = (text: string) => {
-    if (!text.trim()) return;
+  const submit = (text: string, files: FileUIPart[] = []) => {
+    if (!text.trim() && files.length === 0) return;
     setHistoryIndex(null);
-    onSubmit(text);
+    onSubmit(text, files);
   };
 
   // Enter runs a command; one that needs arguments is completed instead.
@@ -146,8 +239,30 @@ export function Composer({
     }
   };
 
+  const onDragEnter = (event: DragEvent) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  };
+  const endDrag = () => {
+    dragDepth.current = 0;
+    setDragging(false);
+  };
+
   return (
-    <div className="relative">
+    <div
+      className="relative"
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={(event) => {
+        if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      }}
+      onDrop={endDrag}
+    >
       {menuOpen ? (
         <div
           className="bg-popover text-popover-foreground absolute inset-x-0 bottom-full z-20 mb-2 max-h-72 overflow-y-auto rounded-lg border p-1 shadow-lg"
@@ -211,9 +326,15 @@ export function Composer({
       ) : null}
 
       <PromptInput
+        accept={CHAT_ACCEPT}
         className="border-border/60"
-        onSubmit={({ text }) => submit(text)}
+        maxFileSize={CHAT_MAX_FILE_BYTES}
+        maxFiles={CHAT_MAX_FILES}
+        multiple
+        onError={(err) => onFileError?.(err.message)}
+        onSubmit={({ text, files }) => submit(text, files)}
       >
+        <AttachmentChips onCount={setAttachmentCount} />
         <PromptInputTextarea
           autoFocus
           onChange={(event) => edit(event.target.value)}
@@ -223,10 +344,25 @@ export function Composer({
           value={value}
         />
         <PromptInputFooter>
-          <PromptInputTools>{footer}</PromptInputTools>
-          <PromptInputSubmit disabled={!value.trim() && !busy} onStop={onStop} status={status} />
+          <PromptInputTools>
+            <AttachButton />
+            {footer}
+          </PromptInputTools>
+          <PromptInputSubmit
+            disabled={!value.trim() && attachmentCount === 0 && !busy}
+            onStop={onStop}
+            status={status}
+          />
         </PromptInputFooter>
       </PromptInput>
+
+      {dragging ? (
+        <div className="border-primary bg-background/80 pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed">
+          <p className="text-muted-foreground text-xs font-medium">
+            Drop files to attach — images, PDF, DOCX, text
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

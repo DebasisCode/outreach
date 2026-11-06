@@ -117,6 +117,28 @@ function shrinkOutput(toolName: string, text: string): string {
       );
     case "knowledge_search":
       return "(Knowledge base results from an earlier turn — search again if you need them.)";
+    case "github_read_file":
+      return (
+        pickJson(text, (data) => ({
+          owner: data.owner,
+          repo: data.repo,
+          ref: data.ref,
+          path: data.path,
+          sha: data.sha,
+          note: "(File content from an earlier turn — call github_read_file again before editing.)",
+        })) ?? clip(text)
+      );
+    case "github_list_files":
+      return (
+        pickJson(text, (data) => ({
+          owner: data.owner,
+          repo: data.repo,
+          ref: data.ref,
+          path: data.path,
+          entries: list(data.entries).slice(0, 100),
+          truncated: data.truncated,
+        })) ?? clip(text)
+      );
     case "browser_apply_start":
     case "browser_apply_fill":
     case "browser_apply_next":

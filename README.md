@@ -22,7 +22,11 @@ Open http://localhost:3000, then add your keys under **API keys** (Ctrl+,):
 | Composio | job search, sending email, the Google Sheets tracker |
 
 Then connect accounts under **Connections** (plug icon): Gmail or Outlook to
-send, Google Sheets for the tracker, SerpAPI (optional) for Google Jobs.
+send, Google Sheets for the tracker, GitHub to read and edit repositories and
+open pull requests, and SerpAPI (optional) for Google Jobs. GitHub requests only
+its `repo` OAuth scope (required by GitHub OAuth for commits and PRs involving
+private repositories), without workflow, organization-admin or repository-deletion
+scopes; an existing broader GitHub auth config is not reused.
 
 For applying, fill in **Applicant profile** (ID-card icon, or `/profile`) and
 upload your resume. Applications open in Google Chrome (or Edge) — install one
@@ -34,10 +38,19 @@ Everything is stored locally in `.data/outreach.db` (SQLite), keys included.
 
 - **Jobs → people → email → send.** Results show as cards with buttons: *Find
   recruiter* on a job, *Get email* on a person, *Write email* on a found email,
-  *Send / Don't send* on the email itself.
+  and the email itself opens with **Edit** (change the wording, tick
+  *Attach my resume*) before **Send / Don't send**.
+- **Attachments in chat.** Drag & drop or Ctrl+V a screenshot, PDF, DOCX or
+  text file into the chat box. Images go with the message so the model can
+  look at them; documents are read into your knowledge base automatically.
 - **Application tracker.** With Google Sheets connected, an "Outreach Tracker"
   sheet keeps Jobs (with a Status column you can edit), Contacts and Emails up
   to date automatically.
+- **GitHub.** Ask the assistant to inspect your repositories, directories, files
+  or pull requests. It can create branches, atomically create/update/delete
+  files in a commit, and open pull requests. Reads run directly; every branch,
+  commit and PR waits for your review and approval. Use `/github <request>` as a
+  shortcut.
 - **Memory.** Facts about you that the assistant knows in every chat (like a
   `CLAUDE.md`). Start a message with `#` to add one, open `/memory` to edit, or
   just tell the assistant — it saves them itself.
@@ -53,8 +66,10 @@ Everything is stored locally in `.data/outreach.db` (SQLite), keys included.
 - **Browsing.** Ask it to do something on a website: it opens the page in the
   same window, reads it and clicks or types. Clicks that would submit, send,
   buy or delete something wait for your OK in the chat.
-- **Knowledge base.** Upload your resume and notes; the assistant searches them
-  when writing.
+- **Knowledge base.** Upload your resume and notes (or drop files into the
+  chat); the assistant searches them when writing, and saves useful things
+  there itself — job descriptions, company research — so it doesn't have to
+  find them again.
 - **Context that stays small.** Older tool results are trimmed for the model,
   `/compact` summarizes a long chat, and it auto-compacts near the limit. The
   status line shows how full the context is.
@@ -137,7 +152,7 @@ headless browser. Set `OUTREACH_BROWSER_PATH` if Chrome isn't installed.
 - `src/app/page.tsx` — the chat UI; `src/components/` — cards, composer, palette, dialogs
 - `src/app/api/chat/route.ts` — the agent loop (AI SDK), memory and compaction
 - `src/lib/tools.ts` — the tools the model can call
-- `src/lib/composio.ts`, `src/lib/cleanlist.ts`, `src/lib/tracker.ts` — integrations
+- `src/lib/composio.ts`, `src/lib/github.ts`, `src/lib/cleanlist.ts`, `src/lib/tracker.ts` — integrations
 - `src/lib/context.ts` — trimming, compaction and token estimates
 - `src/lib/browser/` — the browser engine: `session.ts` (the window), `inpage.ts` + `scan.ts` (reading forms), `fill.ts` (filling and checking), `match.ts` (answers and option matching), `flow.ts` (Apply / Next / Submit), `browse.ts` (general browsing)
 - `src/lib/applications.ts` — applications step by step for the chat tools; `src/lib/applicant.ts` — the Applicant profile and resume file

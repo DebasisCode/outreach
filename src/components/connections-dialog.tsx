@@ -305,7 +305,8 @@ export function ConnectionsDialog({
           <DialogDescription>
             Accounts the assistant can act through, managed by Composio. Emails
             are sent from your own mailbox, and only after you click Send.
-            Google Sheets keeps your application tracker.
+            Google Sheets keeps your application tracker. GitHub branches,
+            commits and pull requests also wait for your approval.
           </DialogDescription>
         </DialogHeader>
 
